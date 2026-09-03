@@ -1,0 +1,96 @@
+#!/bin/sh
+set -eu
+
+charger_device=c440000.spmi:pmic@2:charger@1000
+fuel_gauge_device=c440000.spmi:pmic@2:fuel-gauge@4000
+rradc_device=c440000.spmi:pmic@2:adc@4500
+charger=/sys/class/power_supply/pmi8998-charger
+battery=/sys/class/power_supply/qcom-battery
+state=/run/m1892-power.state
+
+fail() { echo "M1892_POWER_FAIL: $1" >&2; exit 1; }
+bound_to() { test "$(basename "$(readlink "/sys/bus/platform/devices/$1/driver" 2>/dev/null || true)")" = "$2"; }
+
+case ${1:-start} in start|check) action=${1:-start} ;; *) echo "usage: $0 {start|check}" >&2; exit 2 ;; esac
+test "$(id -u)" = 0 || fail 'root required'
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS is not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 has recorded errors'
+
+if test "$action" = start; then
+	# modprobe itself enforces the running kernel's module ABI.  No build hash is
+	# embedded here, so a normal kernel/package update does not break charging.
+	modprobe qcom_spmi_rradc
+	modprobe qcom_smbx
+
+	attempt=0
+	while ! bound_to "$rradc_device" qcom-spmi-rradc; do
+		attempt=$((attempt + 1)); test "$attempt" -lt 200 || fail 'RRADC bind timeout'; sleep 0.1
+	done
+	if ! bound_to "$charger_device" qcom-smbx-charger; then
+		echo "$charger_device" >/sys/bus/platform/drivers/qcom-smbx-charger/bind 2>/dev/null || true
+	fi
+	attempt=0
+	while ! bound_to "$charger_device" qcom-smbx-charger; do
+		attempt=$((attempt + 1)); test "$attempt" -lt 100 || fail 'charger bind timeout'; sleep 0.1
+	done
+	if ! bound_to "$fuel_gauge_device" pmi8998-fg; then
+		echo "$fuel_gauge_device" >/sys/bus/platform/drivers/pmi8998-fg/bind 2>/dev/null || true
+	fi
+	attempt=0
+	while ! bound_to "$fuel_gauge_device" pmi8998-fg; do
+		attempt=$((attempt + 1)); test "$attempt" -lt 100 || fail 'fuel-gauge bind timeout'; sleep 0.1
+	done
+fi
+
+bound_to "$rradc_device" qcom-spmi-rradc || fail 'RRADC is not bound'
+bound_to "$charger_device" qcom-smbx-charger || fail 'charger is not bound'
+bound_to "$fuel_gauge_device" pmi8998-fg || fail 'fuel gauge is not bound'
+test -d "$charger" && test -d "$battery" || fail 'power supplies are absent'
+
+current_max=$(cat "$charger/current_max")
+online=$(cat "$charger/online")
+health=$(cat "$charger/health")
+present=$(cat "$battery/present")
+status=$(cat "$battery/status")
+capacity=$(cat "$battery/capacity")
+voltage=$(cat "$battery/voltage_now")
+temperature=$(cat "$battery/temp")
+case "$online" in
+	1)
+		# USB current limits are quantized by the charger driver.  A host
+		# connection commonly reports 475 mA even though the product policy
+		# caps the path at 500 mA.  Accept only the conservative negotiated
+		# range; never treat a larger, unvalidated limit as safe.
+		test "$current_max" -ge 100000 && test "$current_max" -le 500000 ||
+			fail "unexpected online current limit: current_max=$current_max"
+		;;
+	0)
+		test "$current_max" -eq 0 ||
+			fail "unexpected offline current limit: current_max=$current_max"
+		;;
+	*) fail "unexpected charger online state: online=$online" ;;
+esac
+test "$health" = Good || fail "charger health: $health"
+test "$present" = 1 || fail 'battery is absent'
+test "$capacity" -ge 0 && test "$capacity" -le 100 || fail "capacity: $capacity"
+test "$voltage" -ge 3000000 && test "$voltage" -le 4450000 || fail "voltage: $voltage"
+test "$temperature" -ge 0 && test "$temperature" -le 500 || fail "temperature: $temperature"
+for supply in /sys/class/power_supply/*; do
+	case $(basename "$supply") in *smb1355*|*parallel*) fail 'unvalidated external fast charger is enabled' ;; esac
+done
+
+{
+	echo rradc=qcom-spmi-rradc
+	echo charger=pmi8998-charger
+	echo fuel_gauge=qcom-battery
+	echo charger_online="$online"
+	echo current_max_ua="$current_max"
+	echo battery_status="$status"
+	echo capacity_percent="$capacity"
+	echo voltage_uv="$voltage"
+	echo temperature_decic="$temperature"
+	echo boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+} >"$state"
+udevadm trigger --subsystem-match=power_supply --action=change 2>/dev/null || true
+echo "M1892_POWER_OK online=$online current_max_ua=$current_max status=$status capacity=$capacity voltage_uv=$voltage temperature_decic=$temperature"

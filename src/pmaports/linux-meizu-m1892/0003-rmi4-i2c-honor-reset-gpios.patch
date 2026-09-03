@@ -1,0 +1,52 @@
+diff --git a/drivers/input/rmi4/rmi_i2c.c b/drivers/input/rmi4/rmi_i2c.c
+--- a/drivers/input/rmi4/rmi_i2c.c
++++ b/drivers/input/rmi4/rmi_i2c.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <linux/i2c.h>
++#include <linux/gpio/consumer.h>
+ #include <linux/rmi.h>
+ #include <linux/of.h>
+ #include <linux/delay.h>
+@@ -12,6 +13,7 @@
+ #include "rmi_driver.h"
+ 
+ #define BUFFER_SIZE_INCREMENT 32
++#define RMI_RESET_ACTIVE_MS 10
+ 
+ /**
+  * struct rmi_i2c_xport - stores information for i2c communication
+@@ -39,6 +41,7 @@ struct rmi_i2c_xport {
+ 	size_t tx_buf_size;
+ 
+ 	struct regulator_bulk_data supplies[2];
++	struct gpio_desc *reset_gpio;
+ 	u32 startup_delay;
+ };
+ 
+@@ -246,6 +249,24 @@ static int rmi_i2c_probe(struct i2c_client *client)
+ 	if (error)
+ 		return error;
+ 
++	/*
++	 * reset-gpios is part of the RMI4 binding but historically was not
++	 * consumed by this transport. Assert an optional active-low reset
++	 * after the supplies are enabled, then return the sensor to its
++	 * deasserted state before the normal startup delay.
++	 */
++	rmi_i2c->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
++						      GPIOD_OUT_HIGH);
++	if (IS_ERR(rmi_i2c->reset_gpio))
++		return dev_err_probe(&client->dev, PTR_ERR(rmi_i2c->reset_gpio),
++				     "failed to get reset GPIO\n");
++
++	if (rmi_i2c->reset_gpio) {
++		msleep(RMI_RESET_ACTIVE_MS);
++		gpiod_set_value_cansleep(rmi_i2c->reset_gpio, 0);
++		dev_info(&client->dev, "hardware reset pulse complete\n");
++	}
++
+ 	of_property_read_u32(client->dev.of_node, "syna,startup-delay-ms",
+ 			     &rmi_i2c->startup_delay);
+ 

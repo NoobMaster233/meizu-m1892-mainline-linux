@@ -1,0 +1,15 @@
+[terminal]
+vt = 7
+
+# Developer preview: enter the configured Phosh session without a password.
+# The fallback remains the packaged Phrog greetd client.  A normal Phosh
+# process does not speak greetd's greeter IPC and therefore must never be used
+# as default_session; doing so leaves tty7 at a console when the user session
+# exits.
+[default_session]
+command = "/usr/libexec/phrog-greetd-session"
+user = "greetd"
+
+[initial_session]
+command = "/usr/local/libexec/m1892-phosh-session-r237"
+user = "@PMOS_USER@"

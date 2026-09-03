@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+
+supervisor=supervise-daemon
+name="M1892 RAM-shadow RMTFS"
+description="Serve Qualcomm EFS from read-only-copied RAM shadows"
+command=/usr/local/sbin/m1892-rmtfs-shadow
+output_log=/run/m1892-rmtfs-shadow.log
+error_log=/run/m1892-rmtfs-shadow.log
+
+# rmtfs may exit while the QRTR namespace is still settling.  This mirrors the
+# distribution's rmtfs-openrc policy and lets supervise-daemon retry it.
+respawn_delay=1
+
+depend()
+{
+	need localmount modules
+	after udev-settle
+	use qrtr-ns
+	before tqftpserv m1892-radio-bootstrap networkmanager modemmanager
+}

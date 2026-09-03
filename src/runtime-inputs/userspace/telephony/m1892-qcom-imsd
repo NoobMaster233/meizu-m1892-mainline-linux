@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+prefix=/opt/m1892-openimsd
+
+test -r "$prefix/lib/libqmi-glib.so.5" || {
+	echo "M1892_QCOM_IMSD_FAIL: private libqmi missing" >&2
+	exit 1
+}
+test -r "$prefix/lib/girepository-1.0/Qmi-1.0.typelib" || {
+	echo "M1892_QCOM_IMSD_FAIL: private Qmi typelib missing" >&2
+	exit 1
+}
+test -r "$prefix/qcom-imsd/imsd.toml" || {
+	echo "M1892_QCOM_IMSD_FAIL: qcom-imsd configuration missing" >&2
+	exit 1
+}
+
+export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GI_TYPELIB_PATH="$prefix/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+export PYTHONPATH="$prefix/qcom-imsd/src:$prefix/python${PYTHONPATH:+:$PYTHONPATH}"
+
+exec python3 -m qcom_imsd \
+	-d qrtr://0 \
+	-c "$prefix/qcom-imsd/imsd.toml" \
+	-v

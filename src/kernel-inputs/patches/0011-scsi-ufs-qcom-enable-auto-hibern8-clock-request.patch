@@ -1,0 +1,60 @@
+From 76417038c4d61fc3d407625c0b9332942f13e142 Mon Sep 17 00:00:00 2001
+From: Palash Kambar <palash.kambar@oss.qualcomm.com>
+Date: Thu, 23 Apr 2026 15:50:23 +0530
+Subject: [PATCH] scsi: ufs: ufs-qcom: Enable Auto Hibern8 clock request support
+
+Backport upstream Linux commit 76417038c4d61fc3d407625c0b9332942f13e142
+to the pinned SDM845 7.1 tree. M1892 R334 booted this change, R335 passed
+60 mounted-root AH8 cycles, and R336/R340 promoted it with the conservative
+150-ms AH8-only policy. Full mounted-root runtime PM remains disabled.
+
+diff --git a/drivers/ufs/host/ufs-qcom.c b/drivers/ufs/host/ufs-qcom.c
+--- a/drivers/ufs/host/ufs-qcom.c
++++ b/drivers/ufs/host/ufs-qcom.c
+@@ -695,6 +695,13 @@ static int ufs_qcom_cfg_timers(struct ufs_hba *hba, bool is_pre_scale_up, unsign
+ 	return 0;
+ }
+ 
++static void ufs_qcom_link_startup_post_change(struct ufs_hba *hba)
++{
++	if (ufshcd_is_auto_hibern8_supported(hba))
++		ufshcd_rmwl(hba, UFS_HW_CLK_CTRL_EN, UFS_HW_CLK_CTRL_EN,
++			    UFS_AH8_CFG);
++}
++
+ static int ufs_qcom_link_startup_notify(struct ufs_hba *hba,
+ 					enum ufs_notify_change_status status)
+ {
+@@ -720,6 +727,9 @@ static int ufs_qcom_link_startup_notify(struct ufs_hba *hba,
+ 		 */
+ 		err = ufshcd_disable_host_tx_lcc(hba);
+ 
++		break;
++	case POST_CHANGE:
++		ufs_qcom_link_startup_post_change(hba);
+ 		break;
+ 	default:
+ 		break;
+diff --git a/drivers/ufs/host/ufs-qcom.h b/drivers/ufs/host/ufs-qcom.h
+--- a/drivers/ufs/host/ufs-qcom.h
++++ b/drivers/ufs/host/ufs-qcom.h
+@@ -268,6 +268,17 @@ enum {
+  */
+ #define NUM_TX_R1W1 13
+ 
++/* bit definitions for UFS_AH8_CFG register */
++#define CC_UFS_SYS_CLK_REQ_EN          BIT(2)
++#define CC_UFS_ICE_CORE_CLK_REQ_EN     BIT(3)
++#define CC_UFS_UNIPRO_CORE_CLK_REQ_EN  BIT(4)
++#define CC_UFS_AUXCLK_REQ_EN           BIT(5)
++
++#define UFS_HW_CLK_CTRL_EN	(CC_UFS_SYS_CLK_REQ_EN |\
++				CC_UFS_ICE_CORE_CLK_REQ_EN |\
++				CC_UFS_UNIPRO_CORE_CLK_REQ_EN |\
++				CC_UFS_AUXCLK_REQ_EN)
++
+ static inline void
+ ufs_qcom_get_controller_revision(struct ufs_hba *hba,
+ 				 u8 *major, u16 *minor, u16 *step)
+-- 
+2.47.3

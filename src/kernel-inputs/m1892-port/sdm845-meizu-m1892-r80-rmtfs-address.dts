@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R80 RMTFS address correction.
+ *
+ * R79 proved that TrustZone rejects the generic SDM845 0x88f00000 RMTFS
+ * range with secure return -2 / Linux -EINVAL.  The existing M1892 Linux 6.1
+ * port deletes that generic node and uses 0xf6301000 instead.  Keep every
+ * other live-proven R66 board property unchanged.
+ */
+
+#include "sdm845-meizu-m1892-r66-wifi-mss.dts"
+
+/delete-node/ &rmtfs_mem;
+
+/ {
+	reserved-memory {
+		rmtfs_mem: memory@f6301000 {
+			compatible = "qcom,rmtfs-mem";
+			reg = <0 0xf6301000 0 0x200000>;
+			no-map;
+
+			qcom,client-id = <1>;
+			qcom,vmid = <15>;
+		};
+	};
+};

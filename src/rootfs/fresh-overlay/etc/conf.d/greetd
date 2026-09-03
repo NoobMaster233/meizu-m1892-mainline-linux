@@ -1,0 +1,5 @@
+# Use the postmarketOS PAM/elogind seat model.  Requiring elogind here makes
+# OpenRC start dbus and cgroups first, so a fresh installation cannot race
+# greetd against the service that owns seat0.
+cfgfile="/etc/phrog/greetd-config.toml"
+rc_need="elogind"

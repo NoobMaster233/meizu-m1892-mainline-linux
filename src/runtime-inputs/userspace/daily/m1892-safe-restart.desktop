@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Safe Restart
+Name[zh_CN]=安全重启 Linux
+Comment=Stop services and remount storage read-only before restarting
+Comment[zh_CN]=停止服务并将存储重挂为只读后安全重启
+Exec=/usr/local/bin/m1892-safe-restart
+TryExec=/usr/local/bin/m1892-safe-restart
+Icon=system-reboot
+Terminal=false
+Categories=System;
+Keywords=reboot;restart;重启;
+StartupNotify=false

@@ -1,0 +1,34 @@
+CONFIG_DRM_PANEL_SAMSUNG_SOFEF00M=m
+CONFIG_TYPEC=y
+CONFIG_TYPEC_TCPM=y
+CONFIG_TYPEC_QCOM_PMIC=y
+CONFIG_REGULATOR_QCOM_USB_VBUS=y
+CONFIG_INPUT_M1892_DW7914=y
+
+# The M1892 speaker amplifiers are CS35L41 devices on SPI.  Build the codec
+# stack and the SDM845 machine driver as modules so the owner-local rootfs can
+# install the exact modules produced alongside the release kernel.
+CONFIG_SND_SOC_CS35L41_SPI=m
+
+# Container networking for the public daily image.  Keep the nftables/NAT
+# closure built in: the release boot artifact updates the kernel independently
+# of the rootfs module package, so new container networking must not depend on
+# modules that an older installed root may not contain.
+CONFIG_NF_CONNTRACK=y
+CONFIG_NF_NAT=y
+CONFIG_NF_TABLES=y
+CONFIG_NF_TABLES_INET=y
+CONFIG_NFT_CT=y
+CONFIG_NFT_MASQ=y
+CONFIG_NFT_NAT=y
+CONFIG_NFT_REJECT=y
+CONFIG_NFT_REJECT_INET=y
+CONFIG_NFT_COMPAT=y
+CONFIG_NETFILTER_XTABLES=y
+CONFIG_NETFILTER_XT_NAT=y
+CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
+CONFIG_NETFILTER_XT_TARGET_REDIRECT=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
+CONFIG_NETFILTER_XT_MATCH_COMMENT=y
+CONFIG_NETFILTER_XT_MATCH_MARK=y

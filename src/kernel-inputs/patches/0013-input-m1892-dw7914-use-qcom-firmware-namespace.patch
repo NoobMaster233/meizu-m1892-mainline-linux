@@ -1,0 +1,27 @@
+From: M1892 mainline maintainers <m1892-mainline@invalid.example>
+Subject: [PATCH] input: m1892-dw7914: use packaged Qualcomm firmware path
+
+The privacy-clean public image obtains proprietary device firmware only from
+the owner's official Flyme package.  That package follows the kernel firmware
+layout and installs this payload below qcom/m1892.  Request the same canonical
+path from the driver so no duplicate or ad-hoc compatibility copy is needed.
+
+SPDX-License-Identifier: GPL-2.0-only
+---
+ drivers/input/misc/m1892-dw7914-safe-pulse.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/input/misc/m1892-dw7914-safe-pulse.c b/drivers/input/misc/m1892-dw7914-safe-pulse.c
+--- a/drivers/input/misc/m1892-dw7914-safe-pulse.c
++++ b/drivers/input/misc/m1892-dw7914-safe-pulse.c
+@@ -49,7 +49,7 @@
+ #define DW7914_M1892_FW_SIZE           12288
+ #define DW7914_M1892_RAM_CHUNK         1024
+ #define DW7914_M1892_FW_FNV1A64        0x7de856ef0fc3b332ULL
+-#define DW7914_M1892_FW_NAME           "m1892/dw_172hz.bin"
++#define DW7914_M1892_FW_NAME           "qcom/m1892/dw_172hz.bin"
+ 
+ /* Stock 4.9 calls dw7914_vd_clamp_set(8520), which writes 8520 / 100. */
+ #define DW7914_M1892_VD_CLAMP          0x55
+-- 
+2.39.5

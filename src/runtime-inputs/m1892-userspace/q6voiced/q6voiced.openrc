@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+. /usr/share/q6voiced/q6voiced.conf
+
+name="q6voiced"
+description="q6voice call audio routing"
+command="/usr/bin/q6voiced"
+command_args="hw:${q6voice_card},${q6voice_device}"
+command_user="nobody:audio"
+command_background=true
+pidfile="/run/q6voiced.pid"
+output_log="/var/log/q6voiced.log"
+error_log="/var/log/q6voiced.log"
+
+depend() {
+	need dbus m1892-speaker
+	after modemmanager
+}
+
+start_pre() {
+	checkpath -d -m 0755 /var/log
+	checkpath -f -m 0640 -o nobody:audio "$output_log"
+}

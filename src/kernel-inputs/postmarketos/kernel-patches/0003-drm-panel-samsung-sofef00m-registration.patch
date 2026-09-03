@@ -1,0 +1,31 @@
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -1028,6 +1028,16 @@ config DRM_PANEL_SAMSUNG_SOFEF00
+ 
+ 	    Samsung AMS628NW01 (found in OnePlus 6, 1080x2280@60Hz)
+ 
++config DRM_PANEL_SAMSUNG_SOFEF00M
++	tristate "Samsung SOFEF00M DSI panel controller"
++	depends on OF
++	depends on DRM_MIPI_DSI
++	depends on BACKLIGHT_CLASS_DEVICE
++	help
++	  Say Y or M here if you want to enable support for the Samsung
++	  SOFEF00M AMOLED panel found in the Meizu 16th Plus (M1892),
++	  with a resolution of 1080x2160 at 60 Hz.
++
+ config DRM_PANEL_SEIKO_43WVF1G
+ 	tristate "Seiko 43WVF1G panel"
+ 	depends on OF
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -103,6 +103,7 @@ obj-$(CONFIG_DRM_PANEL_SAMSUNG_S6E8AA0) += panel-samsung-s6e8aa0.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_S6E8AA5X01_AMS561RA01) += panel-samsung-s6e8aa5x01-ams561ra01.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_S6E8FC0) += panel-samsung-s6e8fc0-m1906f9.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_SOFEF00) += panel-samsung-sofef00.o
++obj-$(CONFIG_DRM_PANEL_SAMSUNG_SOFEF00M) += panel-samsung-sofef00m.o
+ obj-$(CONFIG_DRM_PANEL_SEIKO_43WVF1G) += panel-seiko-43wvf1g.o
+ obj-$(CONFIG_DRM_PANEL_SHARP_LQ079L1SX01) += panel-sharp-lq079l1sx01.o
+ obj-$(CONFIG_DRM_PANEL_SHARP_LQ101R1SX01) += panel-sharp-lq101r1sx01.o

@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+fail()
+{
+	echo "M1892_UFS_POLICY_FAIL: $1" >&2
+	exit 1
+}
+
+host=/sys/devices/platform/soc@0/1d84000.ufshc
+sdev=$host/host0/target0:0:0/0:0:0:0
+disk=/sys/class/block/sda
+state=/run/m1892-ufs-policy.state
+
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(tr -d ' \t\r\n' <"$disk/device/model")" = KLUDG4U1EA-B0C1 || fail 'unexpected UFS device'
+test "$(cat "$disk/device/state")" = running || fail 'UFS block device is not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 has recorded errors'
+
+# Keep the validated Auto-Hibern8 link-idle optimization, but do
+# not runtime-suspend the mounted daily root.  The previous level-3 policy
+# passed bounded promotion tests, then correlated with repeated whole-machine
+# hard hangs during sustained network + UFS writes.  System suspend remains
+# level 3 below, so explicit s2idle can still put the device into SLEEP and the
+# link into HIBERN8.
+printf on >"$host/power/control"
+printf on >"$sdev/power/control"
+printf 0 >"$host/rpm_lvl"
+printf 3 >"$host/spm_lvl"
+printf 150000 >"$host/auto_hibern8"
+
+test "$(cat "$host/auto_hibern8")" = 150000 || fail 'AH8 write did not stick'
+test "$(cat "$host/rpm_lvl")" = 0 || fail 'runtime PM level write did not stick'
+test "$(cat "$host/spm_lvl")" = 3 || fail 'system PM level write did not stick'
+test "$(cat "$host/power/control")" = on || fail 'host runtime PM is not disabled'
+test "$(cat "$sdev/power/control")" = on || fail 'LUN runtime PM is not disabled'
+test "$(cat "$host/rpm_target_dev_state")" = ACTIVE || fail 'runtime device target is not ACTIVE'
+test "$(cat "$host/rpm_target_link_state")" = ACTIVE || fail 'runtime link target is not ACTIVE'
+test "$(cat "$host/spm_target_dev_state")" = SLEEP || fail 'system device target is not SLEEP'
+test "$(cat "$host/spm_target_link_state")" = HIBERN8 || fail 'system link target is not HIBERN8'
+test "$(cat "$disk/device/state")" = running || fail 'UFS block device changed state'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 error appeared'
+
+{
+	echo auto_hibern8=150000
+	echo rpm_lvl=0
+	echo spm_lvl=3
+	echo host_control=on
+	echo lun_control=on
+	echo runtime_target_device=ACTIVE
+	echo runtime_target_link=ACTIVE
+	echo system_target_device=SLEEP
+	echo system_target_link=HIBERN8
+	echo stability_policy=ah8-only-runtime-pm-quarantined
+	echo boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+} >"$state"
+
+echo M1892_UFS_POLICY_OK

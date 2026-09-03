@@ -1,0 +1,7 @@
+Device tree model: Meizu 16th Plus (M1892)
+Kernel ABI: 7.1.0-rc1-sdm845
+Base userspace: postmarketOS edge / Alpine / Phosh with exactly one regular /home user
+Required commands: apk, docker, gsettings, gzip, rc-update, setpriv, tar, sha256sum
+Required base programs: /usr/bin/retroarch, /usr/bin/81voltd, phosh, phoc, iio-sensor-proxy
+Required proprietary/device-local inputs are outside this overlay: Qualcomm firmware,
+sensor registry/calibration, Wi-Fi credentials, modem profile, Bluetooth bonds and ROMs.

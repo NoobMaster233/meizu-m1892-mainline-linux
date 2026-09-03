@@ -1,0 +1,190 @@
+#!/bin/sh
+set -eu
+
+state=/run/m1892-radio-bootstrap.state
+wifi_device=18800000.wifi
+wifi_driver=ath10k_snoc
+fallback=no
+
+fail()
+{
+	message=$1
+	{
+		echo outcome=fail
+		echo "reason=$message"
+	} >"$state"
+	echo "M1892_RADIO_BOOTSTRAP_FAIL: $message" >&2
+	exit 1
+}
+
+find_mpss()
+{
+	for candidate in /sys/class/remoteproc/remoteproc*; do
+		test -r "$candidate/name" || continue
+		case $(cat "$candidate/name") in
+			4080000.remoteproc|mpss) printf '%s\n' "$candidate"; return 0 ;;
+		esac
+	done
+	return 1
+}
+
+wait_mpss()
+{
+	count=0
+	while test "$count" -lt 600; do
+		remoteproc=$(find_mpss 2>/dev/null || true)
+		if test -n "$remoteproc" &&
+			test "$(cat "$remoteproc/state" 2>/dev/null || true)" = running; then
+			printf '%s\n' "$remoteproc"
+			return 0
+		fi
+		count=$((count + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+wait_stable_process()
+{
+	name=$1
+	count=0
+	stable=0
+	while test "$count" -lt 300; do
+		if pgrep -x "$name" >/dev/null 2>&1; then
+			stable=$((stable + 1))
+			test "$stable" -ge 20 && return 0
+		else
+			stable=0
+		fi
+		count=$((count + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+wait_mpss_node()
+{
+	count=0
+	while test "$count" -lt 300; do
+		remoteproc=$(find_mpss 2>/dev/null || true)
+		test -n "$remoteproc" && {
+			printf '%s\n' "$remoteproc"
+			return 0
+		}
+		count=$((count + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+wait_wlan()
+{
+	count=0
+	while test "$count" -lt 300; do
+		test -e /sys/class/net/wlan0 && return 0
+		count=$((count + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+wait_radio_stable()
+{
+	count=0
+	stable=0
+	while test "$count" -lt 900; do
+		remoteproc=$(find_mpss 2>/dev/null || true)
+		if test -n "$remoteproc" &&
+			test "$(cat "$remoteproc/state" 2>/dev/null || true)" = running &&
+			pgrep -x rmtfs >/dev/null 2>&1 &&
+			pgrep -x tqftpserv >/dev/null 2>&1 &&
+			test -e /sys/class/net/wlan0; then
+			stable=$((stable + 1))
+			test "$stable" -ge 300 && return 0
+		else
+			stable=0
+		fi
+		count=$((count + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = \
+	'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(uname -r)" = 7.1.0-rc1-sdm845 || fail 'wrong kernel ABI'
+test "$(findmnt -n -o SOURCE /)" = /dev/sda19 || fail 'unexpected root'
+test -s /lib/firmware/qcom/sdm845/m1892/mba.mbn || fail 'MPSS MBA firmware absent'
+test -s /lib/firmware/qcom/sdm845/m1892/modem.mbn || fail 'MPSS firmware absent'
+test -s /lib/firmware/ath10k/WCN3990/hw1.0/firmware-5.bin ||
+	fail 'WLAN firmware absent'
+test -s /lib/firmware/ath10k/WCN3990/hw1.0/board-2.bin ||
+	fail 'WLAN board data absent'
+test -s /lib/firmware/ath10k/WCN3990/hw1.0/wlanmdsp.mbn ||
+	fail 'WLAN modem firmware absent'
+test -L /lib/firmware/qcom/sdm845/m1892/wlanmdsp.mbn ||
+	fail 'WLAN protection-domain firmware alias absent'
+test "$(readlink /lib/firmware/qcom/sdm845/m1892/wlanmdsp.mbn)" = \
+	../../../ath10k/WCN3990/hw1.0/wlanmdsp.mbn ||
+	fail 'WLAN protection-domain firmware alias is incorrect'
+wait_stable_process tqftpserv || fail 'tqftpserv did not remain stable'
+wait_stable_process rmtfs || fail 'rmtfs did not remain stable'
+test -r /run/m1892-rmtfs-shadow.state || fail 'RMTFS shadow state absent'
+grep -qx 'outcome=starting' /run/m1892-rmtfs-shadow.state ||
+	grep -qx 'outcome=pass' /run/m1892-rmtfs-shadow.state ||
+	fail 'RMTFS shadow did not pass its safety gate'
+grep -qx 'backing=ram-shadow' /run/m1892-rmtfs-shadow.state ||
+	fail 'RMTFS is not using RAM shadow backing'
+
+# The required bring-up path loads qcom_pd_mapper before
+# MPSS.  Without it, the modem can expose its ordinary QMI services while the
+# wlan/fw protection domain is never resolved: WLFW service 69 never appears,
+# ath10k_snoc remains bound without registering its core, and wlan0 is absent.
+# A publication-safe boot image deliberately leaves this ownership to the
+# firmware-complete root, so retain the required order explicitly.
+modprobe qcom_pd_mapper || fail 'qcom_pd_mapper load failed'
+test -d /sys/module/qcom_pd_mapper || fail 'qcom_pd_mapper is not active'
+modprobe qcom_q6v5_mss || fail 'qcom_q6v5_mss load failed'
+modprobe ath10k_snoc || fail 'ath10k_snoc load failed'
+
+remoteproc=$(wait_mpss_node) || fail 'MPSS remoteproc node absent'
+case $(cat "$remoteproc/state" 2>/dev/null || true) in
+	offline)
+		echo start >"$remoteproc/state" || fail 'MPSS controlled start failed'
+		;;
+	running) ;;
+	*) fail 'MPSS remoteproc entered an unsafe initial state' ;;
+esac
+remoteproc=$(wait_mpss) || fail 'MPSS did not reach running'
+if ! wait_wlan; then
+	device=/sys/bus/platform/devices/$wifi_device
+	driver=/sys/bus/platform/drivers/$wifi_driver
+	test -e "$device" || fail 'WLAN platform device absent'
+	test -w "$driver/bind" || fail 'WLAN bind control absent'
+
+	# An ath10k probe can time out while MPSS is recovering
+	# yet remain driver-bound.  Once MPSS and both firmware servers are stable,
+	# a single targeted rebind is the bounded recovery; never trigger the
+	# unsafe global deferred-probe queue.
+	if test -L "$device/driver"; then
+		test -w "$driver/unbind" || fail 'WLAN unbind control absent'
+		printf '%s\n' "$wifi_device" >"$driver/unbind" ||
+			fail 'WLAN unbind failed'
+		sleep 2
+	fi
+	printf '%s\n' "$wifi_device" >"$driver/bind" || fail 'WLAN bind failed'
+	fallback=yes
+	wait_wlan || fail 'wlan0 absent after targeted rebind'
+fi
+wait_radio_stable || fail 'MPSS/WLAN did not remain stable for 30 seconds'
+
+{
+	echo outcome=pass
+	echo remoteproc="${remoteproc##*/}"
+	echo remoteproc_state=running
+	echo pd_mapper=loaded
+	echo wlan0=present
+	echo radio_stable_seconds=30
+	echo "wlan_recovery_attempted=$fallback"
+} >"$state"
+echo "M1892_RADIO_BOOTSTRAP_PASS fallback=$fallback"

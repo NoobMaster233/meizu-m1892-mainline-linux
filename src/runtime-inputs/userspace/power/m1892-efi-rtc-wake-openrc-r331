@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+description="Disable the unusable M1892 EFI RTC wake source"
+
+depend() {
+	need localmount
+	before networkmanager
+}
+
+start() {
+	ebegin "$description"
+	/usr/local/sbin/m1892-efi-rtc-wake-r331
+	eend $?
+}

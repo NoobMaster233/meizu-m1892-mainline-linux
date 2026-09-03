@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# ES-DE 3.4.1 is an SDL2 application. Alpine's system libSDL2 is provided by
+# sdl2-compat (SDL2 calls translated to SDL3), which produced accumulating
+# preview-audio dropouts on M1892. Keep the native SDL2 runtime private to
+# ES-DE so RetroArch and the rest of the system remain untouched.
+export SDL_VIDEODRIVER=wayland
+unset SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY
+export LD_LIBRARY_PATH="/opt/m1892/sdl2-native/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+exec /usr/local/bin/es-de "$@"

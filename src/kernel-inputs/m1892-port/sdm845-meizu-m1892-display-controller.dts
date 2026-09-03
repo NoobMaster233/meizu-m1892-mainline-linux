@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 display-controller-only validation stage.
+ *
+ * This intentionally enables MDSS, DSI0 and its PHY without describing or
+ * powering the OLED panel.  It lets the controller/provider chain be tested
+ * from the already proven ACM/NCM rescue userspace before panel rails or DCS
+ * commands are touched.
+ */
+
+#include "sdm845-meizu-m1892.dts"
+
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l26a_1p2>;
+	status = "okay";
+};
+
+&mdss_dsi0_phy {
+	vdds-supply = <&vreg_l1a_0p875>;
+	status = "okay";
+};

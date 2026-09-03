@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * A0.3 diagnostic WCD9340 enumeration variant for Meizu 16th Plus (M1892).
+ *
+ * Retain the exact R97 ADSP-only DT baseline and add the mature upstream
+ * SDM845 SLIMbus/WCD9340 description.  The M1892-specific reset, interrupt,
+ * supply and micbias values below are corroborated by the stock merged DT.
+ *
+ * The sound card, SPI speaker amplifiers and every PCM route remain disabled.
+ * This variant is only for controlled SLIMbus, regmap and MFD enumeration.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+
+#include "sdm845-meizu-m1892-a0-adsp-passive.dts"
+#include "sdm845-wcd9340.dtsi"
+
+&wcd9340 {
+	reset-gpios = <&tlmm 64 GPIO_ACTIVE_HIGH>;
+
+	vdd-buck-supply = <&vreg_s4a_1p8>;
+	vdd-buck-sido-supply = <&vreg_s4a_1p8>;
+	vdd-tx-supply = <&vreg_s4a_1p8>;
+	vdd-rx-supply = <&vreg_s4a_1p8>;
+	vdd-io-supply = <&vreg_s4a_1p8>;
+
+	qcom,micbias1-microvolt = <1800000>;
+	qcom,micbias2-microvolt = <2700000>;
+	qcom,micbias3-microvolt = <1800000>;
+	qcom,micbias4-microvolt = <1800000>;
+};
+
+&sound {
+	status = "disabled";
+};
+
+&spi0 {
+	status = "disabled";
+};

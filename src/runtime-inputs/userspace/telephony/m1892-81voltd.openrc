@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+description="M1892 IMS Data service with qmapmux IPv6 configuration"
+command=/usr/local/sbin/m1892-81voltd
+command_background=true
+pidfile=/run/81voltd.pid
+output_log=/var/log/m1892-81voltd.log
+error_log=/var/log/m1892-81voltd.log
+
+export G_MESSAGES_DEBUG=all
+
+depend()
+{
+	need modemmanager
+	after m1892-radio-bootstrap m1892-cellular-prepare
+	before m1892-qcom-imsd
+}
+
+start_pre()
+{
+	checkpath -d -m 0755 /var/log
+}

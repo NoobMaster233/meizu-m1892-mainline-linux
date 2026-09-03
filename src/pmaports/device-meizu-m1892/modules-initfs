@@ -1,0 +1,6 @@
+# These are modules in the postmarketOS community config.  The accepted M1892
+# rescue config currently builds the corresponding USB/input paths in-kernel.
+i2c_qcom_geni
+rmi_core
+rmi_i2c
+qcom_spmi_haptics

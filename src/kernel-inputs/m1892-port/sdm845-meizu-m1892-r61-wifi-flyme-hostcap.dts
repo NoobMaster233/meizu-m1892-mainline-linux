@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R61 WCN3990 Flyme-firmware host-capability correction.
+ *
+ * Keep the complete R60 passive-probe candidate, but use the host-capability
+ * behavior from the existing M1892 Linux 6.1 port.  The official Android 8.1
+ * WLAN firmware predates the host-capability request used by newer WCN3990
+ * firmware, so skip that QMI transaction instead of encoding its field as the
+ * older 8-bit type.
+ */
+
+#include "sdm845-meizu-m1892-r60-wifi-probe.dts"
+
+&wifi {
+	/delete-property/ qcom,snoc-host-cap-8bit-quirk;
+	qcom,snoc-host-cap-skip-quirk;
+};

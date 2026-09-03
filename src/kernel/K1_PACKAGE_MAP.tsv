@@ -1,0 +1,70 @@
+# operation	source (relative to research/mainline)	target/intent
+install	postmarketos/config-m1892-k1-base.aarch64	config-postmarketos-qcom-sdm845-m1892.aarch64
+merge-config	postmarketos/config-m1892-product.fragment	CONFIG_DRM_PANEL_SAMSUNG_SOFEF00M=m
+apply	m1892-port/0001-dt-bindings-arm-qcom-add-meizu-m1892.patch	Documentation/devicetree/bindings/arm/qcom.yaml
+apply	m1892-port/patches/qcom-scm-m1892-clean-streaming-page.patch	drivers/firmware/qcom (accepted K0 SCM delta)
+apply	patches/0001-m1892-cs35l41-r442-safe-speaker.patch	sound/soc CS35L41 and SDM845 speaker integration
+apply	patches/0014-ASoC-q6voice-start-after-both-prepare.patch	sound/soc/qcom/qdsp6 Q6Voice bidirectional prepare lifecycle
+apply	m1892-port/patches/rmi4-i2c-honor-reset-gpios.patch	drivers/input/rmi4/rmi_i2c.c
+copy	postmarketos/linux-meizu-m1892/sdm845-meizu-m1892.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892.dts
+copy	m1892-port/sdm845-meizu-m1892-display-controller.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-display-controller.dts
+copy	m1892-port/sdm845-meizu-m1892-sofef00m.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-sofef00m.dts
+copy	m1892-port/sdm845-meizu-m1892-r47-i2c5-controller.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r47-i2c5-controller.dts
+copy	m1892-port/sdm845-meizu-m1892-r48-i2c5-gpi.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r48-i2c5-gpi.dts
+copy	m1892-port/sdm845-meizu-m1892-r51-touch-regulators.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r51-touch-regulators.dts
+copy	m1892-port/sdm845-meizu-m1892-r52-touch-complete.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r52-touch-complete.dts
+copy	m1892-port/sdm845-meizu-m1892-r53-touch-reset.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r53-touch-reset.dts
+copy	m1892-port/sdm845-meizu-m1892-r54-battery-fg.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r54-battery-fg.dts
+copy	m1892-port/sdm845-meizu-m1892-r55-cpufreq-no-lmh.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r55-cpufreq-no-lmh.dts
+copy	m1892-port/sdm845-meizu-m1892-r57-rtc-readonly.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r57-rtc-readonly.dts
+copy	m1892-port/sdm845-meizu-m1892-r58-gpu-probe.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r58-gpu-probe.dts
+copy	m1892-port/sdm845-meizu-m1892-r59-oem-zap.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r59-oem-zap.dts
+copy	m1892-port/sdm845-meizu-m1892-r60-wifi-probe.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r60-wifi-probe.dts
+copy	m1892-port/sdm845-meizu-m1892-r61-wifi-flyme-hostcap.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r61-wifi-flyme-hostcap.dts
+copy	m1892-port/sdm845-meizu-m1892-r66-wifi-mss.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r66-wifi-mss.dts
+copy	m1892-port/sdm845-meizu-m1892-r80-rmtfs-address.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r80-rmtfs-address.dts
+copy	m1892-port/sdm845-meizu-m1892-a0-adsp-passive.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-a0-adsp-passive.dts
+copy	m1892-port/sdm845-meizu-m1892-a0-wcd9340-enum.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-a0-wcd9340-enum.dts
+copy	m1892-port/sdm845-meizu-m1892-a0-qdsp6-dais.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-a0-qdsp6-dais.dts
+copy	m1892-port/sdm845-meizu-m1892-a0-minimal-card.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-a0-minimal-card.dts
+copy	m1892-port/sdm845-meizu-m1892-a0-wcd9340-card.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-a0-wcd9340-card.dts
+copy	m1892-port/sdm845-meizu-m1892-a0-wcd9340-headphones.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-a0-wcd9340-headphones.dts
+copy	m1892-port/sdm845-meizu-m1892-r110-conservative-smb2.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r110-conservative-smb2.dts
+copy	m1892-port/sdm845-meizu-m1892-r144-slpi-sensors.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r144-slpi-sensors.dts
+copy	postmarketos/kernel-sources/panel-samsung-sofef00m.c	drivers/gpu/drm/panel/panel-samsung-sofef00m.c
+copy	postmarketos/kernel-sources/sdm845-meizu-m1892-r159-product.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r159-product.dts
+copy	m1892-port/canonicalize-m1892-current-product-dtb.sh	.m1892/canonicalize-m1892-current-product-dtb.sh
+copy	m1892-port/sdm845-meizu-m1892-current-haptics.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-current-haptics.dtso
+copy	m1892-port/sdm845-meizu-m1892-r306-venus-enable.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r306-venus-enable.dtso
+copy	m1892-port/sdm845-meizu-m1892-r350-ipa-enable.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r350-ipa-enable.dtso
+copy	m1892-port/sdm845-meizu-m1892-r368-disable-coresight.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r368-disable-coresight.dtso
+copy	m1892-port/sdm845-meizu-m1892-r400-smb2-1950ma.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r400-smb2-1950ma.dtso
+copy	m1892-port/sdm845-meizu-m1892-r401-i2c10-passive.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r401-i2c10-passive.dtso
+copy	m1892-port/sdm845-meizu-m1892-r402-smb1355-telemetry.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r402-smb1355-telemetry.dtso
+copy	m1892-port/sdm845-meizu-m1892-r403-usb-host-sink-xpad.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r403-usb-host-sink-xpad.dtso
+copy	m1892-port/sdm845-meizu-m1892-r404-pmi8998-otg-vbus.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r404-pmi8998-otg-vbus.dtso
+copy	m1892-port/sdm845-meizu-m1892-r407-pmi8998-source-pd.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r407-pmi8998-source-pd.dtso
+copy	m1892-port/sdm845-meizu-m1892-r408-pmi8998-sinking-host.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r408-pmi8998-sinking-host.dtso
+copy	m1892-port/sdm845-meizu-m1892-r409-pmi8998-sinking-host-op.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r409-pmi8998-sinking-host-op.dtso
+copy	m1892-port/sdm845-meizu-m1892-r447-cs35l41-sd2-muted.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r447-cs35l41-sd2-muted.dtso
+copy	m1892-port/sdm845-meizu-m1892-r438-speaker-routes.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r438-speaker-routes.dtso
+copy	m1892-port/sdm845-meizu-m1892-r470-reserve-removed-tail.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r470-reserve-removed-tail.dtso
+copy	m1892-port/sdm845-meizu-m1892-r495-volume-down.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-r495-volume-down.dtso
+copy	m1892-port/sdm845-meizu-m1892-voice-call.dtso	.m1892/dtb-overlays/sdm845-meizu-m1892-voice-call.dtso
+copy	postmarketos/linux-meizu-m1892/sdm845-meizu-m1892-r86-bluetooth-passive.dts	arch/arm64/boot/dts/qcom/sdm845-meizu-m1892-r86-bluetooth-passive.dts
+apply	postmarketos/kernel-patches/0003-drm-panel-samsung-sofef00m-registration.patch	drivers/gpu/drm/panel registration
+apply	postmarketos/kernel-patches/0004-power-supply-qcom-smbx-conservative-current.patch	drivers/power/supply/qcom_smbx.c
+apply	postmarketos/kernel-patches/0005-arm64-dts-qcom-build-meizu-m1892.patch	arch/arm64/boot/dts/qcom/Makefile
+apply	postmarketos/kernel-patches/0006-drm-msm-dsi-balance-runtime-pm-on-power-off.patch	drivers/gpu/drm/msm/dsi/dsi_host.c
+apply	postmarketos/linux-meizu-m1892/0007-ath10k-m1892-limit-sta-width-80.patch	drivers/net/wireless/ath/ath10k/mac.c
+apply	m1892-port/qcom-pmi8998-tcpm-r407.patch	drivers/usb/typec/tcpm/qcom PMI8998 TCPM integration
+copy	m1892-port/qcom_pmi8998_typec_port-r407.c	drivers/usb/typec/tcpm/qcom/qcom_pmi8998_typec_port.c
+copy	m1892-port/qcom_pmi8998_typec_port-r407.h	drivers/usb/typec/tcpm/qcom/qcom_pmi8998_typec_port.h
+copy	m1892-port/qcom_usb_vbus-regulator-r404.c	drivers/regulator/qcom_usb_vbus-regulator.c
+apply	patches/0012-input-misc-add-m1892-dw7914-bounded-ff.patch	drivers/input/misc Kconfig and Makefile
+copy	external/dw7914-r254/dw7914-safe-pulse.c	drivers/input/misc/m1892-dw7914-safe-pulse.c
+copy	postmarketos/kernel-sources/m1892-dw7914-bounded-ff.c	drivers/input/misc/m1892-dw7914-bounded-ff.c
+apply	patches/0013-input-m1892-dw7914-use-qcom-firmware-namespace.patch	drivers/input/misc/m1892-dw7914-safe-pulse.c
+apply	patches/0011-scsi-ufs-qcom-enable-auto-hibern8-clock-request.patch	drivers/ufs/host/ufs-qcom.c
+apply	patches/0010-mm-disable-kfree-rcu-sheaf-fast-path.patch	mm/slab_common.c
+apply	patches/0009-drm-msm-dsi-phy-m1892-forbid-runtime-suspend.patch	drivers/gpu/drm/msm/dsi/phy/dsi_phy.c

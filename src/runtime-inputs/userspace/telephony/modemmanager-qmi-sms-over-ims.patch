@@ -1,0 +1,49 @@
+diff --git a/src/mm-sms-qmi.c b/src/mm-sms-qmi.c
+index a131ccc9..0a6cf630 100644
+--- a/src/mm-sms-qmi.c
++++ b/src/mm-sms-qmi.c
+@@ -299,0 +300 @@ typedef struct {
++    gboolean sms_on_ims_fallback;
+@@ -318,0 +320 @@ static void sms_send_next_part (GTask *task);
++static void sms_send_generic (GTask *task);
+@@ -331,0 +334 @@ send_generic_ready (QmiClientWms *client,
++    ctx = g_task_get_task_data (task);
+@@ -344,0 +348,23 @@ send_generic_ready (QmiClientWms *client,
++        /*
++         * M1892 needs the IMS hint on LTE packet-switched service, while a
++         * CS-capable carrier may reject it. Retry once without the hint for
++         * the two modem errors that indicate the requested domain cannot be
++         * used. Other failures remain fatal so a single SMS is never sent
++         * twice after an ambiguous timeout.
++         */
++        if (!ctx->sms_on_ims_fallback &&
++            MM_SMS_PART_IS_3GPP ((MMSmsPart *)ctx->current->data) &&
++            (g_error_matches (error,
++                              QMI_PROTOCOL_ERROR,
++                              QMI_PROTOCOL_ERROR_INVALID_OPERATION) ||
++             g_error_matches (error,
++                              QMI_PROTOCOL_ERROR,
++                              QMI_PROTOCOL_ERROR_WMS_MESSAGE_DELIVERY_FAILURE))) {
++            mm_obj_dbg (self, "SMS over IMS unavailable; retrying once through the default domain");
++            ctx->sms_on_ims_fallback = TRUE;
++            qmi_message_wms_raw_send_output_unref (output);
++            g_error_free (error);
++            sms_send_generic (task);
++            return;
++        }
++
+@@ -364,2 +389,0 @@ send_generic_ready (QmiClientWms *client,
+-    ctx = g_task_get_task_data (task);
+-
+@@ -373,0 +398 @@ send_generic_ready (QmiClientWms *client,
++    ctx->sms_on_ims_fallback = FALSE;
+@@ -427,0 +453,9 @@ sms_send_generic (GTask *task)
++    /*
++     * The tested M1892 carrier profile is LTE packet-switched only. Try the
++     * QMI WMS IMS domain first; the completion callback falls back once to
++     * the modem's default domain when IMS is not available.
++     */
++    if (MM_SMS_PART_IS_3GPP ((MMSmsPart *)ctx->current->data) &&
++        !ctx->sms_on_ims_fallback)
++        qmi_message_wms_raw_send_input_set_sms_on_ims (input, TRUE, NULL);
++

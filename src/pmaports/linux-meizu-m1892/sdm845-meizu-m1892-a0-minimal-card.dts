@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 A0.6a: register one QDSP6 front end as a sound card, but do not
+ * connect WCD9340, SLIMbus back ends, MBHC or either speaker amplifier.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/sound/qcom,q6asm.h>
+
+#include "sdm845-meizu-m1892-a0-qdsp6-dais.dts"
+
+&sound {
+	compatible = "qcom,sdm845-sndcard";
+	model = "Meizu 16th Plus";
+	status = "okay";
+
+	mm1-dai-link {
+		link-name = "MultiMedia1";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		};
+	};
+};

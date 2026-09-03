@@ -1,0 +1,154 @@
+# Reference: <https://postmarketos.org/devicepkg>
+# Device-specific kernel package derived from the SDM845 mainline package.
+maintainer="M1892 mainline bring-up <m1892@example.com>"
+_flavor="meizu-m1892"
+pkgname="linux-$_flavor"
+pkgver=7.1_rc1
+pkgrel=3
+pkgdesc="Mainline Linux kernel for the Meizu 16th Plus"
+arch="aarch64"
+_carch="arm64"
+url="https://gitlab.com/sdm845-mainline/linux"
+license="GPL-2.0-only"
+options="!check !strip !tracedeps pmb:cross-native"
+makedepends="
+	bison
+	clang
+	elfutils-dev
+	findutils
+	flex
+	linux-headers
+	lld
+	llvm
+	openssl-dev
+	pahole
+	perl
+	postmarketos-installkernel
+	python3
+	zstd
+"
+
+_tag="sdm845-7.1-rc1-r0"
+_dtb="sdm845-meizu-m1892-r159-product"
+
+source="
+	linux-$_tag.tar.gz::https://gitlab.com/sdm845-mainline/linux/-/archive/$_tag/linux-$_tag.tar.gz
+	config-meizu-m1892.aarch64
+	0001-dt-bindings-arm-qcom-add-meizu-m1892.patch
+	0002-qcom-scm-m1892-clean-streaming-page.patch
+	0003-rmi4-i2c-honor-reset-gpios.patch
+	0004-drm-panel-samsung-sofef00m-registration.patch
+	0005-power-supply-qcom-smbx-conservative-current.patch
+	0006-arm64-dts-qcom-build-meizu-m1892.patch
+	0007-ath10k-m1892-limit-sta-width-80.patch
+	panel-samsung-sofef00m.c
+	sdm845-meizu-m1892.dts
+	sdm845-meizu-m1892-display-controller.dts
+	sdm845-meizu-m1892-sofef00m.dts
+	sdm845-meizu-m1892-r47-i2c5-controller.dts
+	sdm845-meizu-m1892-r48-i2c5-gpi.dts
+	sdm845-meizu-m1892-r51-touch-regulators.dts
+	sdm845-meizu-m1892-r52-touch-complete.dts
+	sdm845-meizu-m1892-r53-touch-reset.dts
+	sdm845-meizu-m1892-r54-battery-fg.dts
+	sdm845-meizu-m1892-r55-cpufreq-no-lmh.dts
+	sdm845-meizu-m1892-r57-rtc-readonly.dts
+	sdm845-meizu-m1892-r58-gpu-probe.dts
+	sdm845-meizu-m1892-r59-oem-zap.dts
+	sdm845-meizu-m1892-r60-wifi-probe.dts
+	sdm845-meizu-m1892-r61-wifi-flyme-hostcap.dts
+	sdm845-meizu-m1892-r66-wifi-mss.dts
+	sdm845-meizu-m1892-r80-rmtfs-address.dts
+	sdm845-meizu-m1892-r86-bluetooth-passive.dts
+	sdm845-meizu-m1892-r110-conservative-smb2.dts
+	sdm845-meizu-m1892-r144-slpi-sensors.dts
+	sdm845-meizu-m1892-a0-minimal-card.dts
+	sdm845-meizu-m1892-a0-qdsp6-dais.dts
+	sdm845-meizu-m1892-a0-wcd9340-enum.dts
+	sdm845-meizu-m1892-a0-wcd9340-card.dts
+	sdm845-meizu-m1892-a0-adsp-passive.dts
+	sdm845-meizu-m1892-a0-wcd9340-headphones.dts
+	sdm845-meizu-m1892-r159-product.dts
+"
+builddir="$srcdir/linux-$_tag"
+
+prepare() {
+	default_prepare
+	cp "$srcdir/config-$_flavor.$CARCH" .config
+	install -Dm644 "$srcdir/panel-samsung-sofef00m.c" \
+		drivers/gpu/drm/panel/panel-samsung-sofef00m.c
+	for dts in "$srcdir"/sdm845-meizu-m1892*.dts; do
+		install -Dm644 "$dts" "arch/arm64/boot/dts/qcom/${dts##*/}"
+	done
+}
+
+build() {
+	unset LDFLAGS
+	export KBUILD_BUILD_USER="m1892"
+	export KBUILD_BUILD_HOST="k1-clean"
+	export KBUILD_BUILD_VERSION=1
+	# ISO form is accepted by Alpine BusyBox and remains human-readable in
+	# uname while representing the same frozen UTC build instant as K1.
+	export KBUILD_BUILD_TIMESTAMP="2026-05-09 04:21:17 UTC"
+
+	make ARCH="$_carch" LLVM=1 LOCALVERSION= olddefconfig
+	test "$(make -s ARCH="$_carch" LLVM=1 LOCALVERSION= kernelrelease)" \
+		= "7.1.0-rc1-sdm845"
+	make ARCH="$_carch" LLVM=1 LOCALVERSION= \
+		Image.gz modules "qcom/$_dtb.dtb"
+}
+
+package() {
+	install -Dm644 "arch/$_carch/boot/Image.gz" "$pkgdir/boot/vmlinuz"
+	install -Dm644 .config "$pkgdir/boot/config-7.1.0-rc1-sdm845"
+	install -Dm644 "arch/$_carch/boot/dts/qcom/$_dtb.dtb" \
+		"$pkgdir/boot/dtbs/qcom/$_dtb.dtb"
+
+	make modules_install ARCH="$_carch" LLVM=1 LOCALVERSION= \
+		INSTALL_MOD_PATH="$pkgdir/usr" INSTALL_MOD_STRIP=1
+	rm -f "$pkgdir"/usr/lib/modules/*/build \
+		"$pkgdir"/usr/lib/modules/*/source
+
+	install -Dm644 include/config/kernel.release \
+		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+}
+
+sha512sums="
+94da173aaf74dd33ef8ff9015e92759481cd0da5bd8a1e52c8664fd372d48a1155655001ad2e9d26557733c71ae8bc448e4ebdf1372b8f32159907a35f0306a9  linux-sdm845-7.1-rc1-r0.tar.gz
+0b7e1dc5702520208f73fdf453656de95d5cfb93e9b18e183a011b9bb1494b338e1cdb7fcbe1f3ac0b76831e6e52e78cbe08a1a437fae9bc64690f3c8c0f5e71  config-meizu-m1892.aarch64
+710a8d6cc3db21b65ba797accc1ee4d8e188d59fe11a0d907d87c07090248fd28088ce50491addef1b575a9f4cee498f573d26dad8bb7be320a59522a2b3f80d  0001-dt-bindings-arm-qcom-add-meizu-m1892.patch
+3ff395b9c21d81ef68592dcf7149162b05bec722aaf8ed264af4f7a3d449f90a7ae6e04a44972ce3d5d94c60c17d8591d51a0553382d663d571a3580efff9d2d  0002-qcom-scm-m1892-clean-streaming-page.patch
+0c48ce7054794f563af16f216d8a4bffbbc7dfec30783cd1f59275eda5b4a9843b18102a723f1ee2e273c2e4279b79b0f4c712ae52ca8a939edcd8727f37bc23  0003-rmi4-i2c-honor-reset-gpios.patch
+7642d15ea8e1dad153d6585e95ac371ba5437cac3c16dde68cf7756b0bec249f974874e9d5353456e17fe6ea268c395b8191b27335ece19d278ddd8d497957e1  0004-drm-panel-samsung-sofef00m-registration.patch
+b68f40aa924ef9b909c0e948b2fd89d0a24a0bc48ee07a9014082bc9660b78bfe1b15acfe46053edca8a7b4d80a32d838696768df0aa8d3f63a9450eacd0e2f1  0005-power-supply-qcom-smbx-conservative-current.patch
+9e8458403ffad29decda41364125ab7590b4312d0ae10e8e852b2300e71b7fa871bce0cb95b00f3607df27b22e43ce125105a977417faf57ae5bf5c74fe235fb  0006-arm64-dts-qcom-build-meizu-m1892.patch
+ed0d36c760793a751dbe5dd356b56e36fefb0d095a89c5291d9110e4b072592ac799c709c835b4bee14080f87f43b2eaf8c17d44e2ab8adcdb00a90b0e6b8e24  0007-ath10k-m1892-limit-sta-width-80.patch
+4f3b017837190106dc1d5c4a048a7fea8f3947e60ba1febaa0e7b4e6a06c88b92b4a2c7252a3121d252a542d6ae651d49773399408c793082647bcbaa0f1ddb1  panel-samsung-sofef00m.c
+9e3ec23bc0ab5a7b3bdc2589ea967345e31997243c2170f68d1b97924556e2aa7ce9a7d70d63a9b0e25b824a513a7a2d8ef15445d6bcfba4007dcc076e491ac1  sdm845-meizu-m1892.dts
+9ff06376154331542cea57e4a26fa46932910abede41ce9de66046b053613ef6fa22a713e8255829171b23797adf2d884b4095e02fd57ce9865f1d565b43d0ad  sdm845-meizu-m1892-display-controller.dts
+2a04173fed36cfe6ccc4aa1665e1b348152ea969914550dc18b2f85d8ba227b6c2cce6c1a77f5ab58122cbd54f5d098a8f93ebc54d60243296675ddaf06fcffb  sdm845-meizu-m1892-sofef00m.dts
+6466dce06bf9233d7d62be3247fcf68710531b8aae3cf4e81291fa8332509e17acaa583bc9c095f6518050c05ef4a8836092f81a73c57b3a6af349969aeae0a6  sdm845-meizu-m1892-r47-i2c5-controller.dts
+26610e87911c5e3a588eeacc4c22847951f9fd470bd216ba1cb033b5c90ad5ea2b70693e79cdde243d2b0a0ede55c3726b042e1683ecdab22f65498108e10578  sdm845-meizu-m1892-r48-i2c5-gpi.dts
+e8cbe6f665dd1506f2cb7cf5861035973f23ef8df1c25122fc7974876beb1eeebd80e3658e650e4cdfda438226aa1019a20364792f77ee68677d9d3c884fa0ac  sdm845-meizu-m1892-r51-touch-regulators.dts
+3bbde430744fbe49dd0f2d30239d9980ecccd02c675359dbd16b12f6929e217727890087e61e3369fc80e90637e55f580e28c4a05e16515d62659f9317bf60d2  sdm845-meizu-m1892-r52-touch-complete.dts
+8b2a3604a4faafb82cf1e17ff545f400f97ac9ac1d47ab0512b2e5e3af846c4c76309438da179cba78b8b235073df833ca125038242ff0a2f7cfd247f6cdeddd  sdm845-meizu-m1892-r53-touch-reset.dts
+0012b93f167974220ec3a0396448beef659681450319881801e39d65f3aefce6975daa6c2f194a76376ae6848ad353111256a2a4bb10559bd8290b0debb3aeed  sdm845-meizu-m1892-r54-battery-fg.dts
+143a27a7235bb809858c177013fc96a64d45fc9dd1df1ef45a73f77e41b3e9bbd2086e31691ce3c11a5557094e10272228920f1821a925c54285675241b67111  sdm845-meizu-m1892-r55-cpufreq-no-lmh.dts
+de1dd70d3bdd2d71af8069e2c16a06f56dde88b3ef672551aa3d01950a59cb5495d33bd91d15e06316a92b65fec11a1a0325f2d40dfcf8014a6fb08d7cf5d71d  sdm845-meizu-m1892-r57-rtc-readonly.dts
+8954b73b8a0e476b979fb2174095a0e827a6117b0fa03a7aecce29d843c44d126989f018899a0c18ad721609b932fcc0bba8eef555173d4972831712787fb385  sdm845-meizu-m1892-r58-gpu-probe.dts
+3d6f0c7eea424c2947a1d55aae5899a0c6fb7af852a0f0db260f40a7b8a29b71a60d2240de0a55a49ba62746bcfa08b981628b38ed7469e1b17d86951aa02887  sdm845-meizu-m1892-r59-oem-zap.dts
+fa80f427cc49165ecc76c25568f8df3cd978ebcd585c4e758c9706b6743e2d1c9c241a4ecaf268506b890da3312ccd61298bc7454d7a1c6c06f1071df684467c  sdm845-meizu-m1892-r60-wifi-probe.dts
+7a615327840447df7e273ac93361153fa28a2bd46c8a2af6e96fc848a110e543224728f5ddbb747761c0e034326db961eceb1d2430a9e26d0d5c83180a44e63d  sdm845-meizu-m1892-r61-wifi-flyme-hostcap.dts
+4e15ba699bc30d50e367ea6cee1225cee3a7429261a44216b9fc9839cecea28c2e66596bbce544aca19ba9f73d06a64b817782204f8a63d68962bce99f17e652  sdm845-meizu-m1892-r66-wifi-mss.dts
+b1e18c02393208a14d7f805de799c5619ca00de8e5c28b650fbf1fbbb0aac23ff93a45b1fdb2c093bd1200f19c41454d0dd819fb11d885d84ca682197dd7e633  sdm845-meizu-m1892-r80-rmtfs-address.dts
+a8d499c4956b7e55fd8177d5a206cdf1d479cf68ad058987e8696796693bf0f55db259731a68008fd0e0ee316976448062c88ec6e263fe3ca316210d69a34868  sdm845-meizu-m1892-r86-bluetooth-passive.dts
+8df8ba2db7a5cd55f40300dbfc15e1bae3dffc3e1f3e639603ed58b8ffb57b483b0058fc1496cde0cf0c50ac05af86deb075836d9fe705434edb279f5efd5f32  sdm845-meizu-m1892-r110-conservative-smb2.dts
+e4b2d5d55b2aa0cb517b62f2f389d111aa1b643a2a2981ec99b63ef0667f4a8a8d7fbdc46cc786a8a7dd03078840a1e1a27d20ea0d7fc699b8ba4e5ab0bfbb77  sdm845-meizu-m1892-r144-slpi-sensors.dts
+dce8bac3bc6e433d7e4373b3e4bfc27b2be02a6d4a87613b0c679c56c5fa318014fe2bceb9c4fe4b632d00a23f6dc44293565410699b7fdde93d32ed82b611e8  sdm845-meizu-m1892-a0-minimal-card.dts
+a453637c2fbc657307b520b1905146580b176f97eede335b25f62c4b95dc160d457532e32a23d853681b0923589def82986c31b98f9ef689971ea0ba60234160  sdm845-meizu-m1892-a0-qdsp6-dais.dts
+01391dba7c866e3ec16ea35ba1bfafe6ee2108ca2be1837bd8df3d3c53c6482b2ba0b93bfb8570d34981dac3d18380a9ac04b99d0ace66d2b182cab6893ec8dc  sdm845-meizu-m1892-a0-wcd9340-enum.dts
+26b44073e3078bfeece83bff0372d0b0bbd447d4689568ed2d530b7850f71617b62157e5f96fcd91cc4e11e999213fd33fbc394482d2f26b80ffcc5908cfc87a  sdm845-meizu-m1892-a0-wcd9340-card.dts
+aacd193cd6714146e8d1346b4b2d7408d92f8c2f0d123ea9f25d2f4cd025f5bfddf8ad90fa1d0b744a2cb3bcbca9ab4ed71faa545abcde91e2db8a057855e080  sdm845-meizu-m1892-a0-adsp-passive.dts
+00d37fa221a5848057bac51450d511766adf3b0a3f94f942fa4ef8b77a7a568e2fc893136ec3a8d7d7b6123c40f6b6f987022c0cad08b915b2aae44d65a7d73d  sdm845-meizu-m1892-a0-wcd9340-headphones.dts
+254ae6870479814808689e19af9254cd1cb6aa480f85101de8072f36c9f5c8392bd3171d0145c7bc523fe6f24d7ee6cac7cedd7af59560f428116cd2b51b819b  sdm845-meizu-m1892-r159-product.dts
+"

@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+port=/sys/class/typec/port0
+charger=/sys/class/power_supply/pmi8998-charger
+limit=500000
+
+test -r "$port/power_role" || exit 0
+test -r "$port/data_role" || exit 0
+test -r "$charger/online" || exit 0
+test -r "$charger/current_max" || exit 0
+
+# Brackets identify the current role in the Type-C class ABI.  Clamp only the
+# pass-through topology: phone consumes power while retaining USB Host data.
+# Ordinary SDP/DCP charging and direct OTG source operation are untouched.
+grep -q '\[sink\]' "$port/power_role" || exit 0
+grep -q '\[host\]' "$port/data_role" || exit 0
+test "$(cat "$charger/online")" = 1 || exit 0
+
+current=$(cat "$charger/current_max")
+case "$current" in
+	''|*[!0-9]*) exit 0 ;;
+esac
+test "$current" -gt "$limit" || exit 0
+
+printf '%s\n' "$limit" >"$charger/current_max"
+applied=$(cat "$charger/current_max")
+test "$applied" -le "$limit"
+logger -t m1892-typec-host-sink-limit \
+	"clamped pass-through input current from ${current}uA to ${applied}uA"

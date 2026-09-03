@@ -1,0 +1,158 @@
+# SPDX-License-Identifier: MIT
+name: Build public components
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Public component to rebuild
+        required: true
+        default: all
+        type: choice
+        options: [all, kernel, edk2, telephony-audio]
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    if: inputs.component == 'all' || inputs.component == 'kernel'
+    runs-on: ubuntu-22.04
+    # A clean dependency-complete module graph is intentionally built so
+    # modpost validates every inter-module symbol before packaging. Hosted
+    # runner load varies, therefore leave headroom above typical build time.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned-host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison binutils-aarch64-linux-gnu \
+            device-tree-compiler flex gcc-aarch64-linux-gnu \
+            gcc-11-aarch64-linux-gnu git make \
+            libelf-dev libssl-dev kmod
+      - name: Materialize and build kernel
+        run: |
+          git init out/linux-upstream
+          git -C out/linux-upstream remote add origin https://gitlab.com/sdm845-mainline/linux.git
+          git -C out/linux-upstream fetch --depth=1 origin 85f1df2a4ec71d7a91dd95a7a49f889d1595ffa8
+          git -C out/linux-upstream checkout --detach FETCH_HEAD
+          ./scripts/materialize-public-kernel.sh out/linux-upstream out/linux-m1892
+          JOBS=4 ./scripts/build-public-kernel.sh out/linux-m1892 out/kernel
+          ./scripts/package-public-kernel.sh out/kernel \
+            "$RUNNER_TEMP/m1892-public-kernel.tar.gz"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: m1892-public-kernel
+          path: |
+            ${{ runner.temp }}/m1892-public-kernel.tar.gz
+            ${{ runner.temp }}/m1892-public-kernel.tar.gz.sha256
+          retention-days: 7
+  edk2:
+    if: inputs.component == 'all' || inputs.component == 'edk2'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y acpica-tools build-essential clang \
+            gcc-aarch64-linux-gnu gettext git llvm nasm uuid-dev
+      - name: Build EDK2 loader
+        run: |
+          git clone https://github.com/edk2-porting/edk2-sdm845.git out/edk2-sdm845
+          git -C out/edk2-sdm845 checkout e1952621f419f8db60ed28271264e1b5184c571d
+          git -C out/edk2-sdm845 submodule update --init --recursive
+          ./scripts/build-public-edk2-loader.sh out/edk2-sdm845 out/edk2
+          tar -C out/edk2 -czf "$RUNNER_TEMP/m1892-public-edk2.tar.gz" \
+            M1892-EDK2-BUILD-MANIFEST.txt workspace/uefi-m1892-kernel
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: m1892-public-edk2
+          path: ${{ runner.temp }}/m1892-public-edk2.tar.gz
+          retention-days: 7
+  telephony-audio:
+    if: inputs.component == 'all' || inputs.component == 'telephony-audio'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - name: Build and verify AArch64 call audio runtime
+        run: |
+          mkdir "$RUNNER_TEMP/m1892-builder-context"
+          cat >"$RUNNER_TEMP/m1892-builder-context/Dockerfile" <<'EOF'
+          FROM alpine:edge@sha256:020dfcbaaf4cc1078bf2d9c7ba31a8466e334061dcd2f248001d68f79e52c000
+          RUN apk add --no-cache alsa-lib-dev appstream-dev bash-completion-dev build-base dbus-dev \
+            elogind-dev git glib-dev gobject-introspection-dev libgudev-dev \
+            libmbim-dev libqmi-dev libqrtr-glib-dev linux-headers meson \
+            modemmanager-dev pkgconf polkit-dev pulseaudio-dev python3 qrtr-dev \
+            samurai tar unzip wget
+          EOF
+          docker build --platform linux/arm64 \
+            -t m1892-telephony-builder:ci \
+            "$RUNNER_TEMP/m1892-builder-context"
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD:/src:ro" -v "$RUNNER_TEMP:/out" \
+            m1892-telephony-builder:ci sh -euxc '
+              /src/scripts/build-m1892-telephony-audio-runtime.sh \
+                /out/m1892-telephony-audio-runtime.tar.gz \
+                /out/m1892-telephony-audio-source.tar.gz
+              /src/scripts/verify-m1892-telephony-audio-runtime.sh \
+                /out/m1892-telephony-audio-runtime.tar.gz
+              /src/scripts/verify-m1892-telephony-audio-source.sh \
+                /out/m1892-telephony-audio-source.tar.gz
+            '
+          mkdir "$RUNNER_TEMP/offline-input" "$RUNNER_TEMP/offline-output"
+          cp "$RUNNER_TEMP/m1892-telephony-audio-source.tar.gz" \
+            "$RUNNER_TEMP/offline-input/"
+          docker run --rm --network none --platform linux/arm64 \
+            -v "$RUNNER_TEMP/offline-input:/input:ro" \
+            -v "$RUNNER_TEMP/offline-output:/out" \
+            m1892-telephony-builder:ci sh -euxc '
+              mkdir /tmp/offline-source
+              tar -C /tmp/offline-source -xzf \
+                /input/m1892-telephony-audio-source.tar.gz
+              source_root=/tmp/offline-source/m1892-telephony-audio-source
+              M1892_TELEPHONY_OFFLINE_SOURCE_DIR="$source_root" \
+                "$source_root/scripts/build-m1892-telephony-audio-runtime.sh" \
+                /out/m1892-telephony-audio-runtime.tar.gz
+              "$source_root/scripts/verify-m1892-telephony-audio-runtime.sh" \
+                /out/m1892-telephony-audio-runtime.tar.gz
+            '
+          if ! cmp -s "$RUNNER_TEMP/m1892-telephony-audio-runtime.tar.gz" \
+            "$RUNNER_TEMP/offline-output/m1892-telephony-audio-runtime.tar.gz"; then
+            mkdir "$RUNNER_TEMP/runtime-online" "$RUNNER_TEMP/runtime-offline"
+            tar -C "$RUNNER_TEMP/runtime-online" -xzf \
+              "$RUNNER_TEMP/m1892-telephony-audio-runtime.tar.gz"
+            tar -C "$RUNNER_TEMP/runtime-offline" -xzf \
+              "$RUNNER_TEMP/offline-output/m1892-telephony-audio-runtime.tar.gz"
+            diff -qr "$RUNNER_TEMP/runtime-online" "$RUNNER_TEMP/runtime-offline" || true
+            diff -u "$RUNNER_TEMP/runtime-online/MANIFEST.sha256" \
+              "$RUNNER_TEMP/runtime-offline/MANIFEST.sha256" || true
+            tar -tvf "$RUNNER_TEMP/m1892-telephony-audio-runtime.tar.gz" \
+              >"$RUNNER_TEMP/runtime-online.list"
+            tar -tvf "$RUNNER_TEMP/offline-output/m1892-telephony-audio-runtime.tar.gz" \
+              >"$RUNNER_TEMP/runtime-offline.list"
+            diff -u "$RUNNER_TEMP/runtime-online.list" \
+              "$RUNNER_TEMP/runtime-offline.list" || true
+            exit 1
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: m1892-telephony-audio-runtime
+          path: |
+            ${{ runner.temp }}/m1892-telephony-audio-runtime.tar.gz
+            ${{ runner.temp }}/m1892-telephony-audio-runtime.tar.gz.sha256
+            ${{ runner.temp }}/m1892-telephony-audio-source.tar.gz
+            ${{ runner.temp }}/m1892-telephony-audio-source.tar.gz.sha256
+          retention-days: 7

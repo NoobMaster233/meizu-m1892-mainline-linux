@@ -1,0 +1,170 @@
+#!/bin/sh
+set -eu
+
+# Restore the autonomous bootloader transition on the privacy-clean public
+# root. It retains the validated freeze/restart boundary and pins the
+# exact static restart helper.  This is a maintenance path, not the normal
+# desktop Linux restart path.
+
+root=/dev/sda19
+root_uuid=3982b874-0ec0-57c4-a83b-37965b6be709
+ui_user=
+ui_uid=
+greeter_uid=106
+helper_source=/usr/libexec/m1892/reboot-fastboot-frozen
+helper_sha=5a664ebdeb0ecb046b988d62c267460f71b27a14930b56aed9097b5074e951c7
+helper=/run/reboot-fastboot-frozen
+ready=/run/m1892-safe-fastboot-ready
+greetd_was_started=0
+tqftp_was_started=0
+root_is_frozen=0
+
+fail()
+{
+	echo "M1892_SAFE_FASTBOOT_FAIL: $1" >&2
+	exit 1
+}
+
+root_deleted_fds()
+{
+	root_dev=$(stat -c %d /)
+	for proc in /proc/[0-9]*; do
+		pid=${proc#/proc/}
+		for fd in "$proc"/fd/*; do
+			target=$(readlink "$fd" 2>/dev/null || true)
+			case "$target" in *' (deleted)') ;; *) continue ;; esac
+			dev=$(stat -c %d "$fd" 2>/dev/null || true)
+			test "$dev" = "$root_dev" || continue
+			comm=$(cat "$proc/comm" 2>/dev/null || echo unknown)
+			printf 'pid=%s comm=%s fd=%s target=%s\n' \
+				"$pid" "$comm" "${fd##*/}" "$target"
+		done
+	done
+}
+
+restore_on_fail()
+{
+	if test "$root_is_frozen" -eq 1; then
+		fsfreeze -u / >/dev/null 2>&1 || true
+		root_is_frozen=0
+	fi
+	if test "$tqftp_was_started" -eq 1; then
+		rc-service tqftpserv start >/dev/null 2>&1 || true
+	fi
+	if test "$greetd_was_started" -eq 1; then
+		rc-service greetd start >/dev/null 2>&1 || true
+	fi
+}
+
+case "${1:-}" in
+	check|bootloader|test-frozen) mode=$1 ;;
+	*) echo "usage: $0 {check|bootloader|test-frozen}" >&2; exit 2 ;;
+esac
+test "$(id -u)" = 0 || fail 'root required'
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = \
+	'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(uname -r)" = 7.1.0-rc1-sdm845 || fail 'wrong kernel ABI'
+test "$(findmnt -n -o SOURCE /)" = "$root" || fail 'unexpected root'
+test "$(findmnt -n -o UUID /)" = "$root_uuid" || fail 'root UUID mismatch'
+grep -qx 'ID="postmarketos"' /etc/os-release || fail 'postmarketOS absent'
+ui_record=$(getent passwd | awk -F: '
+	$3 >= 1000 && $3 != 65534 && $6 ~ "^/home/" && $7 !~ /(nologin|false)$/ {
+		print; count++
+	}
+	END { if (count != 1) exit 1 }
+') || fail 'regular user count mismatch'
+ui_user=$(printf '%s\n' "$ui_record" | cut -d: -f1)
+ui_uid=$(printf '%s\n' "$ui_record" | cut -d: -f3)
+test -n "$ui_user" && test -n "$ui_uid" || fail 'regular user resolution failed'
+test "$(id -u greetd)" = "$greeter_uid" || fail 'greetd UID mismatch'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 errors present'
+findmnt -n -o OPTIONS / | tr ',' '\n' | grep -qx rw || fail 'root not writable'
+test -x "$helper_source" || fail 'persistent reboot helper absent'
+test "$(sha256sum "$helper_source" | awk '{print $1}')" = "$helper_sha" ||
+	fail 'persistent reboot helper hash mismatch'
+case $(stat -c '%u:%g:%a' "$helper_source") in
+	0:0:755|0:0:750|0:0:700) ;;
+	*) fail 'persistent reboot helper permissions are unsafe' ;;
+esac
+
+if test "$mode" = check; then
+	echo "M1892_SAFE_FASTBOOT_READY root_uuid=$root_uuid helper_sha256=$helper_sha"
+	exit 0
+fi
+
+install -m 0700 "$helper_source" "$helper"
+cmp -s "$helper_source" "$helper" || fail 'RAM reboot helper copy differs from source'
+rm -f "$ready"
+rc-service greetd status >/dev/null 2>&1 && greetd_was_started=1 || true
+rc-service tqftpserv status >/dev/null 2>&1 && tqftp_was_started=1 || true
+trap restore_on_fail EXIT HUP INT TERM
+
+rc-service tqftpserv stop >/dev/null 2>&1 || true
+pkill -TERM -x tqftpserv 2>/dev/null || true
+# greetd owns the graphical session. Do not kill every process belonging to
+# ui_uid: R6 also runs the user's OpenRC supervisor under that UID, and killing
+# it turns a maintenance dry-run into a fallback-greeter-only session.
+rc-service greetd stop >/dev/null 2>&1 || true
+pkill -TERM -x greetd 2>/dev/null || true
+pkill -TERM -u "$greeter_uid" 2>/dev/null || true
+
+attempt=0
+while pgrep -x tqftpserv >/dev/null 2>&1 ||
+	pgrep -x greetd >/dev/null 2>&1 ||
+	pgrep -u "$ui_uid" -x phoc >/dev/null 2>&1 ||
+	pgrep -u "$ui_uid" -x phosh >/dev/null 2>&1 ||
+	pgrep -u "$ui_uid" -x gnome-session-binary >/dev/null 2>&1; do
+	attempt=$((attempt + 1))
+	if test "$attempt" -eq 50; then
+		pkill -KILL -x tqftpserv 2>/dev/null || true
+		pkill -KILL -x greetd 2>/dev/null || true
+		pkill -KILL -u "$greeter_uid" 2>/dev/null || true
+	fi
+	test "$attempt" -lt 100 || fail 'shutdown owners survived stop'
+	sleep 0.1
+done
+
+sleep 2
+deleted=$(root_deleted_fds)
+test -z "$deleted" || {
+	printf '%s\n' "$deleted" >&2
+	fail 'root-backed deleted file remains open'
+}
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS changed state'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 error appeared'
+
+sync
+deleted=$(root_deleted_fds)
+test -z "$deleted" || {
+	printf '%s\n' "$deleted" >&2
+	fail 'root-backed deleted file appeared after sync'
+}
+fsfreeze -f /
+root_is_frozen=1
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS failed after fsfreeze'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 failed after fsfreeze'
+
+{
+	echo 'implementation=frozen-ram-fastboot'
+	echo 'root=frozen'
+	echo 'deleted_root_fds=0'
+	echo 'graphics=quiesced'
+	echo 'tqftpserv=stopped'
+	echo 'sync=complete'
+	echo 'ufs=running'
+} >"$ready"
+
+if test "$mode" = test-frozen; then
+	fsfreeze -u /
+	root_is_frozen=0
+	trap - EXIT HUP INT TERM
+	restore_on_fail
+	test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 error after test restore'
+	echo M1892_FROZEN_RAM_TEST_PASS
+	exit 0
+fi
+
+# Disconnect root-backed streams before the frozen-root helper prints or
+# invokes RESTART2(bootloader). A successful exec never returns.
+exec "$helper" frozen-root-bootloader </dev/null >/dev/null 2>&1

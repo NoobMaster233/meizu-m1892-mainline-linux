@@ -1,0 +1,19 @@
+#!/bin/sh
+set -u
+
+state=${XDG_STATE_HOME:-${HOME:?HOME is unset}/.local/state}/m1892
+log=$state/suspend.log
+mkdir -p "$state" || exit 1
+chmod 0700 "$state" 2>/dev/null || true
+echo "launch_epoch=$(date +%s)" >>"$log"
+
+if /usr/bin/pkexec /usr/local/libexec/m1892-suspend-broker suspend >>"$log" 2>&1; then
+	echo "result=pass epoch=$(date +%s)" >>"$log"
+	/usr/bin/notify-send -a 'M1892 Power' '深度休眠完成' '系统已恢复，存储和桌面检查通过。' >/dev/null 2>&1 || true
+	exit 0
+fi
+rc=$?
+echo "result=fail rc=$rc epoch=$(date +%s)" >>"$log"
+detail=$(tail -n 1 "$log" 2>/dev/null || true)
+/usr/bin/notify-send -u critical -a 'M1892 Power' '深度休眠未启动' "$detail" >/dev/null 2>&1 || true
+exit "$rc"

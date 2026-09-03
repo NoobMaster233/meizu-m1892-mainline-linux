@@ -1,0 +1,128 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+run_id=m1892-e2e-$$
+image=${M1892_DOCKER_TEST_IMAGE:-m1892/e2e-base-$run_id:local}
+network=$run_id-network
+server=$run_id-server
+limited=$run_id-limited
+volume=$run_id-volume
+work_dir=$(mktemp -d /tmp/m1892-docker-e2e.XXXXXX)
+bind_dir=$work_dir/bind
+compose_dir=$work_dir/compose
+buildx_dir=$work_dir/buildx
+buildx_image=m1892/e2e-buildx-$run_id:local
+base_dir=$work_dir/base
+created_base=0
+
+cleanup()
+{
+	docker rm -f "$server" "$limited" >/dev/null 2>&1 || true
+	docker network rm "$network" >/dev/null 2>&1 || true
+	docker volume rm "$volume" >/dev/null 2>&1 || true
+	if [ -d "$compose_dir" ]; then
+		(cd "$compose_dir" && docker compose -p "$run_id" down --volumes --remove-orphans \
+			>/dev/null 2>&1) || true
+		find "$compose_dir" -depth -delete 2>/dev/null || true
+	fi
+	docker image rm "$buildx_image" >/dev/null 2>&1 || true
+	find "$buildx_dir" -depth -delete 2>/dev/null || true
+	if [ "$created_base" = 1 ]; then
+		docker image rm "$image" >/dev/null 2>&1 || true
+	fi
+	find "$base_dir" -depth -delete 2>/dev/null || true
+	find "$bind_dir" -depth -delete 2>/dev/null || true
+	find "$work_dir" -depth -delete 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+	[ -z "${M1892_DOCKER_TEST_IMAGE:-}" ] || {
+		echo "M1892_DOCKER_FAIL: requested image is absent: $image" >&2
+		exit 1
+	}
+	mkdir -p "$base_dir/rootfs/bin" "$base_dir/rootfs/lib"
+	install -m 0755 /bin/busybox "$base_dir/rootfs/bin/busybox"
+	install -m 0755 /lib/ld-musl-aarch64.so.1 \
+		"$base_dir/rootfs/lib/ld-musl-aarch64.so.1"
+	ln -s ld-musl-aarch64.so.1 "$base_dir/rootfs/lib/libc.musl-aarch64.so.1"
+	for applet in cat nc ping sh sleep wget; do
+		ln -s busybox "$base_dir/rootfs/bin/$applet"
+	done
+	tar -C "$base_dir/rootfs" -cf - . | docker import - "$image" >/dev/null
+	created_base=1
+fi
+docker run --rm "$image" sh -ec \
+	'wget -q -O /dev/null http://example.com/'
+echo M1892_DOCKER_PASS: default-bridge-dns-egress
+
+docker network create "$network" >/dev/null
+docker run -d --name "$server" --network "$network" "$image" \
+	sleep 300 \
+	>/dev/null
+for ignored in 1 2 3 4 5; do
+	docker run --rm --network "$network" "$image" \
+		ping -c 1 -W 1 "$server" >/dev/null 2>&1 && break
+	sleep 1
+done
+docker run --rm --network "$network" "$image" \
+	ping -c 1 -W 2 "$server" >/dev/null
+echo M1892_DOCKER_PASS: user-network-dns
+
+docker volume create "$volume" >/dev/null
+docker run --rm -v "$volume:/data" "$image" sh -ec 'printf volume-ok >/data/result'
+test "$(docker run --rm -v "$volume:/data:ro" "$image" cat /data/result)" = volume-ok
+echo M1892_DOCKER_PASS: named-volume
+
+mkdir -p "$bind_dir"
+printf bind-ok >"$bind_dir/input"
+test "$(docker run --rm -v "$bind_dir:/host:ro" "$image" cat /host/input)" = bind-ok
+echo M1892_DOCKER_PASS: bind-mount
+
+docker run -d --name "$limited" --memory 64m "$image" sleep 30 >/dev/null
+test "$(docker inspect -f '{{.HostConfig.Memory}}' "$limited")" = 67108864
+echo M1892_DOCKER_PASS: memory-limit
+docker rm -f "$limited" >/dev/null
+
+docker rm -f "$server" >/dev/null
+docker run -d --name "$server" -p 127.0.0.1::8080 "$image" \
+	nc -l -p 8080 -e /bin/cat \
+	>/dev/null
+published_port=$(docker port "$server" 8080/tcp | awk -F: 'NR == 1 {print $NF}')
+case $published_port in
+	''|*[!0-9]*) echo 'M1892_DOCKER_FAIL: published port' >&2; exit 1 ;;
+esac
+for ignored in 1 2 3 4 5; do
+	printf publish-ok | nc -w 2 127.0.0.1 "$published_port" 2>/dev/null | grep -qx publish-ok && break
+	sleep 1
+done
+docker inspect -f '{{.State.ExitCode}}' "$server" | grep -qx 0
+echo M1892_DOCKER_PASS: published-port
+
+mkdir -p "$compose_dir"
+cat >"$compose_dir/compose.yaml" <<EOF
+services:
+  writer:
+    image: $image
+    command: ["sh", "-ec", "printf compose-ok >/output/result"]
+    volumes:
+      - output:/output
+volumes:
+  output: {}
+EOF
+(cd "$compose_dir" && docker compose -p "$run_id" run --rm writer >/dev/null)
+test "$(cd "$compose_dir" && docker compose -p "$run_id" run --rm writer cat /output/result)" = compose-ok
+echo M1892_DOCKER_PASS: compose
+
+mkdir -p "$buildx_dir"
+cat >"$buildx_dir/Dockerfile" <<EOF
+FROM $image
+RUN printf buildx-ok >/buildx-result
+CMD ["cat", "/buildx-result"]
+EOF
+docker buildx build --load --tag "$buildx_image" "$buildx_dir" >/dev/null
+test "$(docker run --rm "$buildx_image")" = buildx-ok
+echo M1892_DOCKER_PASS: buildx
+
+echo M1892_DOCKER_SELFTEST_OK

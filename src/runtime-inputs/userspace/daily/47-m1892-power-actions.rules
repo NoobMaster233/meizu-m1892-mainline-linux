@@ -1,0 +1,25 @@
+// Daily user may invoke the two fixed, root-owned M1892 power brokers and the
+// standard elogind power-off path.  On this OpenRC system elogind executes the
+// non-forced /sbin/poweroff BusyBox applet; PID 1 then owns killprocs,
+// savecache and mount-ro before the kernel SYSTEM_OFF request.  Do not grant
+// the ignore-inhibit variant or generic reboot/suspend/hibernate actions.
+polkit.addRule(function(action, subject) {
+    if (subject.active && subject.local &&
+        (action.id == "org.meizu.m1892.manual-suspend" ||
+         action.id == "org.meizu.m1892.safe-restart"))
+        return polkit.Result.YES;
+
+    if (subject.active && subject.local &&
+        (action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions"))
+        return polkit.Result.YES;
+
+    if (subject.active && subject.local &&
+        action.id.indexOf("org.freedesktop.login1.") == 0 &&
+        (action.id.indexOf("reboot") >= 0 ||
+         action.id.indexOf("power-off") >= 0 ||
+         action.id.indexOf("halt") >= 0 ||
+         action.id.indexOf("suspend") >= 0 ||
+         action.id.indexOf("hibernate") >= 0))
+        return polkit.Result.NO;
+});

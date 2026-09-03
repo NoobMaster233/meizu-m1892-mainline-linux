@@ -1,0 +1,52 @@
+# Local-only firmware closure generated from the owner's official Flyme package.
+# The payload is proprietary and is intentionally not stored in this repository.
+maintainer="M1892 mainline bring-up <m1892@example.com>"
+pkgname=firmware-meizu-m1892
+pkgver=20260831
+pkgrel=0
+pkgdesc="Local proprietary runtime firmware for the Meizu 16th Plus"
+url="https://www.flyme.com/firmwarelist-175.html"
+arch="aarch64"
+license="proprietary"
+options="!check !strip !archcheck !spdx !tracedeps textrels pmb:cross-native"
+
+source="
+	m1892-firmware-runtime-20260831.tar.gz
+	a630_gmu.bin::https://gitlab.com/kernel-firmware/linux-firmware/-/raw/20260221/qcom/a630_gmu.bin
+	a630_sqe.fw::https://gitlab.com/kernel-firmware/linux-firmware/-/raw/20260221/qcom/a630_sqe.fw
+"
+builddir="$srcdir"
+
+package() {
+	# Alpine edge is usr-merged.  The kernel's /lib/firmware lookup resolves
+	# to this canonical packaged location on the target root filesystem.
+	mkdir -p "$pkgdir/usr/lib/firmware" "$pkgdir/usr/share"
+	# Payload ownership and modes are package properties, not host properties.
+	# A recursive content copy avoids cp -a ownership failures in rootless
+	# builders; the following two find passes define canonical metadata.
+	cp -R "$srcdir/lib/firmware/." "$pkgdir/usr/lib/firmware/"
+	cp -R "$srcdir/usr/share/." "$pkgdir/usr/share/"
+	# Local extraction may run on a Windows-backed workspace whose tar staging
+	# reports permissive mode bits. Firmware payloads are data, never programs;
+	# normalize the package independently of the host filesystem.
+	find "$pkgdir/usr/lib/firmware" "$pkgdir/usr/share" -type d -exec chmod 0755 {} +
+	find "$pkgdir/usr/lib/firmware" "$pkgdir/usr/share" -type f -exec chmod 0644 {} +
+	install -D -m 0644 "$srcdir/a630_gmu.bin" \
+		"$pkgdir/usr/lib/firmware/qcom/a630_gmu.bin"
+	install -D -m 0644 "$srcdir/a630_sqe.fw" \
+		"$pkgdir/usr/lib/firmware/qcom/a630_sqe.fw"
+	# tqftpserv resolves the wlan/fw protection-domain image through Qualcomm's
+	# product firmware namespace, while the owner-extracted byte is packaged in
+	# the canonical ath10k namespace.  The accepted R82+ boot chain supplied this
+	# exact alias before MPSS was started; make the local firmware package own it
+	# so every locally generated public image retains the invariant.
+	mkdir -p "$pkgdir/usr/lib/firmware/qcom/sdm845/m1892"
+	ln -snf ../../../ath10k/WCN3990/hw1.0/wlanmdsp.mbn \
+		"$pkgdir/usr/lib/firmware/qcom/sdm845/m1892/wlanmdsp.mbn"
+}
+
+sha512sums="
+474dbb8e25e8e38f9e1880b5310e830c51a71732bdcf0264b31b1bac092173ab5eea3f2ad599900e2bef1d5f73a04c456c36521edfdce5fd5c2cca670f0dd3dd  m1892-firmware-runtime-20260831.tar.gz
+19d46015fda04de79382d5d45a0cdd9a6f3526216dd2c28cef8153d05426faeeff00e25b823ed78325a7ca7d60445097ede4b19065d5bf569262b8f1af25b502  a630_gmu.bin
+a4232b63ad12cf31ad54a7f21c5705ea8cdaf0d3eec2fbcd596b0eed0deb2828f1cee5e592695b47c1cb8dee2cbddeb9f87f4a5b03943521f57e2e6d97252905  a630_sqe.fw
+"

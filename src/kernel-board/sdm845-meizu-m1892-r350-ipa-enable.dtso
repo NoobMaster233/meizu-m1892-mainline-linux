@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * Enable the upstream SDM845 IPA data path on the accepted R306 DTB.
+ *
+ * The accepted flattened DTB has no symbol table entry or phandle for the
+ * otherwise unreferenced ipa-fw reserved-memory node.  Assign the audited,
+ * previously unused phandle 0x1000 and reference it from the IPA node.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/reserved-memory/ipa-fw@8c400000";
+
+		__overlay__ {
+			phandle = <0x1000>;
+		};
+	};
+
+	fragment@1 {
+		target-path = "/soc@0/ipa@1e40000";
+
+		__overlay__ {
+			memory-region = <0x1000>;
+			qcom,gsi-loader = "self";
+			firmware-name = "qcom/sdm845/m1892/ipa_fws.mdt";
+			status = "okay";
+		};
+	};
+};

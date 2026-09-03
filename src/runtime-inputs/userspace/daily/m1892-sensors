@@ -1,0 +1,116 @@
+#!/bin/sh
+set -eu
+
+rpc_root=/usr/share/qcom/sdm845/Meizu/m1892
+state=/run/m1892-sensors.state
+ready_marker=/run/m1892-sensors-ready
+ssc_log=/run/m1892-sensors-ssccli.log
+
+fail() { echo "M1892_SENSORS_FAIL: $1" >&2; exit 1; }
+case ${1:-start} in start|check) action=${1:-start} ;; *) echo "usage: $0 {start|check}" >&2; exit 2 ;; esac
+
+test "$(id -u)" = 0 || fail 'root required'
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS is not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 has recorded errors'
+test -s /lib/firmware/qcom/sdm845/Meizu/m1892/slpi.mdt || fail 'SLPI firmware is absent'
+test -r "$rpc_root/dsp/sdsp/fastrpc_shell_2" || fail 'SDSP FastRPC shell is absent'
+test -r "$rpc_root/sensors/sns_reg.conf" || fail 'sensor registry is absent'
+test -r "$rpc_root/sensors/registry/icm206xx_0_platform.config" || fail 'accelerometer calibration is absent'
+
+if test "$action" = start; then
+	# modprobe enforces the current kernel ABI; OEM blob identity belongs in
+	# release-time provenance, not a per-boot version whitelist.
+	modprobe fastrpc
+	modprobe qcom_q6v5_pas
+
+	test -d /sys/bus/platform/devices/smp2p-slpi || fail 'SLPI SMP2P device is absent'
+	if ! test -L /sys/bus/platform/devices/smp2p-slpi/driver; then
+		echo smp2p-slpi >/sys/bus/platform/drivers/qcom_smp2p/bind 2>/dev/null || true
+	fi
+	attempt=0
+	while ! test -L /sys/bus/platform/devices/smp2p-slpi/driver; do
+		attempt=$((attempt + 1)); test "$attempt" -lt 100 || fail 'SLPI SMP2P bind timeout'; sleep 0.1
+	done
+
+	test -d /sys/bus/platform/devices/5c00000.remoteproc || fail 'SLPI remoteproc device is absent'
+	if ! test -L /sys/bus/platform/devices/5c00000.remoteproc/driver; then
+		echo 5c00000.remoteproc >/sys/bus/platform/drivers/qcom_q6v5_pas/bind 2>/dev/null || true
+	fi
+fi
+
+remoteproc=
+attempt=0
+while test "$attempt" -lt 200; do
+	for candidate in /sys/class/remoteproc/remoteproc*; do
+		test -r "$candidate/name" || continue
+		if test "$(cat "$candidate/name")" = slpi; then remoteproc=$candidate; break; fi
+	done
+	if test -n "$remoteproc" && test "$(cat "$remoteproc/state" 2>/dev/null)" = running && test -c /dev/fastrpc-sdsp; then break; fi
+	attempt=$((attempt + 1)); sleep 0.1
+done
+test -n "$remoteproc" || fail 'SLPI remoteproc is absent'
+test "$(cat "$remoteproc/state")" = running || fail 'SLPI is not running'
+test "$(cat "$remoteproc/firmware")" = qcom/sdm845/Meizu/m1892/slpi.mdt || fail 'unexpected SLPI firmware path'
+test -c /dev/fastrpc-sdsp || fail 'SDSP FastRPC device is absent'
+
+if test "$action" = start; then
+	udevadm control --reload-rules
+	udevadm trigger --action=add --name-match=fastrpc-sdsp
+	udevadm settle --timeout=5
+	rc-service hexagonrpcd-sdsp status >/dev/null 2>&1 || rc-service hexagonrpcd-sdsp start
+fi
+test "$(stat -c '%U:%G:%a' /dev/fastrpc-sdsp)" = fastrpc:fastrpc:600 || fail 'FastRPC permissions are wrong'
+hex_pid=$(pgrep -x hexagonrpcd | head -1)
+test -n "$hex_pid" || fail 'hexagonrpcd is absent'
+test "$(awk '/^Uid:/{print $2}' /proc/$hex_pid/status)" = "$(id -u fastrpc)" || fail 'hexagonrpcd is privileged'
+
+if test "$action" = start; then
+	: >"$ssc_log"
+	ready=0
+	attempt=0
+	while test "$attempt" -lt 6; do
+		attempt=$((attempt + 1))
+		tmp=$ssc_log.$$
+		ssccli --sensor accelerometer >"$tmp" 2>&1 & probe=$!
+		poll=0
+		while kill -0 "$probe" 2>/dev/null && test "$poll" -lt 60; do
+			grep -q 'Accelerometer sensor measurement:' "$tmp" && { ready=1; break; }
+			poll=$((poll + 1)); sleep 0.1
+		done
+		kill "$probe" 2>/dev/null || true
+		wait "$probe" 2>/dev/null || true
+		cat "$tmp" >>"$ssc_log"
+		rm -f "$tmp"
+		test "$ready" -eq 0 || break
+		sleep 0.5
+	done
+	test "$ready" -eq 1 || fail 'no accelerometer sample arrived'
+	# iio-sensor-proxy only discovers SSC providers at process start.  D-Bus
+	# activation may have started it before hexagonrpcd was ready, so restart
+	# it after the first real accelerometer sample instead of accepting a
+	# running process that exports HasAccelerometer=false.
+	rc-service iio-sensor-proxy restart
+fi
+
+props=
+attempt=0
+while test "$attempt" -lt 200; do
+	props=$(gdbus call --system --dest net.hadess.SensorProxy --object-path /net/hadess/SensorProxy --method org.freedesktop.DBus.Properties.GetAll net.hadess.SensorProxy 2>/dev/null || true)
+	printf '%s\n' "$props" | grep -q "'HasAccelerometer': <true>" &&
+		printf '%s\n' "$props" | grep -q "'HasAmbientLight': <true>" &&
+		printf '%s\n' "$props" | grep -q "'HasProximity': <true>" && break
+	attempt=$((attempt + 1)); sleep 0.1
+done
+test "$attempt" -lt 200 || fail 'SensorProxy capabilities did not appear'
+
+{
+	echo iio_sensor_proxy=ready
+	echo accelerometer=ready
+	echo ambient_light=ready
+	echo proximity=ready
+	echo remoteproc="$(basename "$remoteproc")"
+	echo boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+} >"$state"
+cp "$state" "$ready_marker"
+echo M1892_SENSORS_OK

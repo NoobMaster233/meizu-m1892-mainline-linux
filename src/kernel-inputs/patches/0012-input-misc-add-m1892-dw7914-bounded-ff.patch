@@ -1,0 +1,59 @@
+From: M1892 mainline maintainers <m1892-mainline@invalid.example>
+Subject: [PATCH] input: misc: add M1892 DW7914 bounded force feedback
+
+Expose the physically accepted M1892 DW7914 implementation through the
+standard Linux FF_RUMBLE input API. The driver authenticates the locally
+supplied stock waveform, stages only the accepted wave, arms an atomic GPIO
+cutoff before GO, and hard-stops every event after 20 ms.
+
+The implementation files are installed separately by the reproducible K1
+source map so this patch only performs ordinary Kconfig/Kbuild integration.
+
+SPDX-License-Identifier: GPL-2.0-only
+---
+ drivers/input/misc/Kconfig  | 15 +++++++++++++++
+ drivers/input/misc/Makefile |  1 +
+ 2 files changed, 16 insertions(+)
+
+diff --git a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -14,6 +14,21 @@ menuconfig INPUT_MISC
+ 
+ if INPUT_MISC
+ 
++config INPUT_M1892_DW7914
++	tristate "Meizu M1892 DW7914 bounded haptics"
++	depends on I2C
++	select INPUT_FF_MEMLESS
++	help
++	  Enable the DW7914 haptic controller found in the Meizu M1892.
++	  Output is exposed through the standard Linux FF_RUMBLE API. The
++	  device-specific waveform must be supplied separately as
++	  m1892/dw_172hz.bin; it is authenticated before use and is not part
++	  of the public kernel source.
++
++	  This driver owns the non-sleeping enable GPIO, arms an independent
++	  atomic cutoff before starting playback and bounds every pulse to
++	  20 milliseconds.
++
+ config INPUT_88PM860X_ONKEY
+ 	tristate "88PM860x ONKEY support"
+ 	depends on MFD_88PM860X
+diff --git a/drivers/input/misc/Makefile b/drivers/input/misc/Makefile
+--- a/drivers/input/misc/Makefile
++++ b/drivers/input/misc/Makefile
+@@ -1,10 +1,11 @@
+ # SPDX-License-Identifier: GPL-2.0
+ #
+ # Makefile for the input misc drivers.
+ #
+ 
+ # Each configuration option enables a list of files.
+ 
++obj-$(CONFIG_INPUT_M1892_DW7914)	+= m1892-dw7914-bounded-ff.o
+ obj-$(CONFIG_INPUT_88PM860X_ONKEY)	+= 88pm860x_onkey.o
+ obj-$(CONFIG_INPUT_88PM80X_ONKEY)	+= 88pm80x_onkey.o
+ obj-$(CONFIG_INPUT_88PM886_ONKEY)	+= 88pm886-onkey.o
+-- 
+2.39.5

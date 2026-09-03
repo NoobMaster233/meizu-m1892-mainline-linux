@@ -1,0 +1,21 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * The current M1892 firmware/SCM combination does not complete the upstream
+ * SDM845 LMH algorithm-enable sequence.  Linux has always left both nodes
+ * unbound behind a global initcall blacklist.  Represent that existing daily
+ * state honestly in DT, so the platform driver can register normally without
+ * a global initcall fence.  Functional LMH support remains a separate patch.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/lmh@17d70800";
+		__overlay__ { status = "disabled"; };
+	};
+	fragment@1 {
+		target-path = "/soc@0/lmh@17d78800";
+		__overlay__ { status = "disabled"; };
+	};
+};

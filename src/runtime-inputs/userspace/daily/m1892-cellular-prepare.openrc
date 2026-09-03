@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+
+description="Prepare M1892 IPA and slot-1 modem before ModemManager"
+command=/usr/local/sbin/m1892-cellular-prepare
+command_args=start
+
+depend()
+{
+	need localmount m1892-radio-bootstrap
+	after dbus modules
+	before modemmanager
+}
+
+start()
+{
+	ebegin "$description"
+	"$command" "$command_args"
+	eend $?
+}

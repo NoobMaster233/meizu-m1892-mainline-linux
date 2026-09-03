@@ -1,0 +1,8 @@
+# ModemManager is owned by OpenRC on this image.  Disabling D-Bus activation
+# prevents the Phosh WWAN panel from racing the m1892-cellular-prepare service
+# and leaving an untracked daemon plus a false OpenRC failure marker.
+[D-BUS Service]
+Name=org.freedesktop.ModemManager1
+Exec=/bin/false
+User=root
+SystemdService=dbus-org.freedesktop.ModemManager1.service

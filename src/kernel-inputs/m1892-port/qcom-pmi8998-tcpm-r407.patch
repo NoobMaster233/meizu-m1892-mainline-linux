@@ -1,0 +1,57 @@
+diff --git a/drivers/usb/typec/tcpm/qcom/Makefile b/drivers/usb/typec/tcpm/qcom/Makefile
+index dc1e88301248..01ed0f95a1b2 100644
+--- a/drivers/usb/typec/tcpm/qcom/Makefile
++++ b/drivers/usb/typec/tcpm/qcom/Makefile
+@@ -4,4 +4,5 @@ obj-$(CONFIG_TYPEC_QCOM_PMIC)		+= qcom_pmic_tcpm.o
+ qcom_pmic_tcpm-y			+= qcom_pmic_typec.o \
+ 					   qcom_pmic_typec_port.o \
++					   qcom_pmi8998_typec_port.o \
+ 					   qcom_pmic_typec_pdphy.o \
+ 					   qcom_pmic_typec_pdphy_stub.o \
+diff --git a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
+index c4af15cc4f50..effec4e70aec 100644
+--- a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
++++ b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
+@@ -23,10 +23,12 @@
+ #include "qcom_pmic_typec.h"
+ #include "qcom_pmic_typec_pdphy.h"
+ #include "qcom_pmic_typec_port.h"
++#include "qcom_pmi8998_typec_port.h"
+ 
+ struct pmic_typec_resources {
+ 	const struct pmic_typec_pdphy_resources	*pdphy_res;
+ 	const struct pmic_typec_port_resources	*port_res;
++	bool					pmi8998_port;
+ };
+ 
+ static int qcom_pmic_typec_init(struct tcpc_dev *tcpc)
+@@ -70,8 +72,12 @@ static int qcom_pmic_typec_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = qcom_pmic_typec_port_probe(pdev, tcpm,
+-					 res->port_res, regmap, base);
++	if (res->pmi8998_port)
++		ret = qcom_pmi8998_typec_port_probe(pdev, tcpm, regmap,
++						    base);
++	else
++		ret = qcom_pmic_typec_port_probe(pdev, tcpm,
++						 res->port_res, regmap, base);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -149,8 +155,14 @@ static const struct pmic_typec_resources pmi632_typec_res = {
+ 	.port_res = &pm8150b_port_res,
+ };
+ 
++static const struct pmic_typec_resources pmi8998_typec_res = {
++	.pdphy_res = &pm8150b_pdphy_res,
++	.pmi8998_port = true,
++};
++
+ static const struct of_device_id qcom_pmic_typec_table[] = {
+ 	{ .compatible = "qcom,pm8150b-typec", .data = &pm8150b_typec_res },
++	{ .compatible = "qcom,pmi8998-typec", .data = &pmi8998_typec_res },
+ 	{ .compatible = "qcom,pmi632-typec", .data = &pmi632_typec_res },
+ 	{ }
+ };

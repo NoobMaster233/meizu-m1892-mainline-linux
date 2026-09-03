@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * Consolidated source form of the physically accepted M1892 DW7914 topology.
+ *
+ * Historical R250 created the client in a local diagnostic build whose DT
+ * source was not retained. Later R259, R260 and R271 changed its compatible,
+ * bus frequency and pre-client electrical state. Keep only the accepted final
+ * state here: one GPIO descriptor owner, GPIO44 low before client creation,
+ * standard force-feedback compatible and the stock 1-MHz dedicated bus.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/pinctrl@3400000";
+
+		__overlay__ {
+			dw7914_preclient_low: dw7914-preclient-low-state {
+				pins = "gpio44";
+				function = "gpio";
+				drive-strength = <2>;
+				bias-disable;
+				output-low;
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/soc@0/dma-controller@a00000";
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@2 {
+		target-path = "/soc@0/geniqup@ac0000/i2c@a90000";
+
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			clock-frequency = <1000000>;
+			pinctrl-0 = <0x6c &dw7914_preclient_low>;
+			status = "okay";
+
+			haptic@59 {
+				compatible = "dongwoon,dw7914-r259";
+				reg = <0x59>;
+				enable-gpios = <0x4e 44 0>;
+			};
+		};
+	};
+};

@@ -1,0 +1,18 @@
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
+index c59375aaa..51c00d9a1 100644
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
+@@ -692,6 +692,13 @@ static int dsi_phy_driver_probe(struct platform_device *pdev)
+ 	ret = devm_pm_runtime_enable(dev);
+ 	if (ret)
+ 		return ret;
++	/*
++	 * M1892 locks up when the DSI PHY runtime-suspends during display
++	 * shutdown.  This kernel build is M1892-specific, so keep the PHY
++	 * runtime-active while allowing the host, panel and regulators to use
++	 * their normal power-down paths.
++	 */
++	pm_runtime_forbid(dev);
+ 
+ 	ret = devm_pm_clk_create(dev);
+ 	if (ret)

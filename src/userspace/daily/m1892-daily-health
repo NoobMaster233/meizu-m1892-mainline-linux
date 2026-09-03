@@ -1,0 +1,243 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail()
+{
+	echo "M1892_DAILY_HEALTH_FAIL: $1" >&2
+	exit 1
+}
+
+pass()
+{
+	echo "M1892_DAILY_HEALTH_PASS: $1"
+}
+
+model=$(tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true)
+test "$model" = 'Meizu 16th Plus (M1892)' || fail "wrong hardware: $model"
+test "$(findmnt -n -o FSTYPE /)" = ext4 || fail 'root is not ext4'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS block device is not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 has recorded errors'
+pass storage
+
+ufs=/sys/devices/platform/soc@0/1d84000.ufshc
+test "$(cat "$ufs/auto_hibern8")" = 150000 || fail 'UFS AH8 policy is not 150 ms'
+test "$(cat "$ufs/rpm_lvl")" = 0 || fail 'UFS runtime PM quarantine is not active'
+test "$(cat "$ufs/spm_lvl")" = 3 || fail 'UFS system PM level is not 3'
+test "$(cat "$ufs/power/control")" = on || fail 'UFS host runtime PM is unexpectedly enabled'
+test "$(cat "$ufs/host0/target0:0:0/0:0:0:0/power/control")" = on || fail 'UFS LUN runtime PM is unexpectedly enabled'
+test "$(cat "$ufs/rpm_target_dev_state")" = ACTIVE || fail 'UFS runtime device target is not ACTIVE'
+test "$(cat "$ufs/rpm_target_link_state")" = ACTIVE || fail 'UFS runtime link target is not ACTIVE'
+test "$(cat "$ufs/spm_target_dev_state")" = SLEEP || fail 'UFS system device target is not SLEEP'
+test "$(cat "$ufs/spm_target_link_state")" = HIBERN8 || fail 'UFS system link target is not HIBERN8'
+pass ufs-ah8-runtime-pm-quarantined
+
+battery=/sys/class/power_supply/qcom-battery
+charger=/sys/class/power_supply/pmi8998-charger
+test -d "$battery" && test -d "$charger" || fail 'battery or charger telemetry is absent'
+test "$(cat "$battery/present")" = 1 || fail 'battery is absent'
+capacity=$(cat "$battery/capacity")
+temperature=$(cat "$battery/temp")
+test "$capacity" -ge 0 && test "$capacity" -le 100 || fail "invalid battery capacity: $capacity"
+test "$temperature" -ge 0 && test "$temperature" -le 500 || fail "unsafe battery temperature: $temperature"
+test "$(cat "$charger/health")" = Good || fail 'charger health is not Good'
+pass "power capacity=${capacity}% temperature_decic=$temperature"
+
+test "$(cat /sys/power/mem_sleep)" = '[s2idle]' || fail 's2idle is unavailable'
+test "$(cat /sys/devices/platform/soc@0/c440000.spmi/spmi-0/0-00/c440000.spmi:pmic@0:pon@800/c440000.spmi:pmic@0:pon@800:pwrkey/power/wakeup)" = enabled || fail 'power key wake is disabled'
+if test -r /sys/devices/platform/rtc-efi.0/power/wakeup; then
+	test "$(cat /sys/devices/platform/rtc-efi.0/power/wakeup)" = disabled || fail 'broken EFI RTC wake source is enabled'
+fi
+pass suspend-capability
+
+phoc=$(pgrep -o -x phoc 2>/dev/null || true)
+test -n "$phoc" || fail 'Phosh compositor is absent'
+session_uid=$(awk '/^Uid:/ { print $2; exit }' "/proc/$phoc/status")
+session_record=$(getent passwd "$session_uid" 2>/dev/null || true)
+test -n "$session_record" || fail "desktop account is absent for uid $session_uid"
+session_user=$(printf '%s\n' "$session_record" | cut -d: -f1)
+session_gid=$(printf '%s\n' "$session_record" | cut -d: -f4)
+session_home=$(printf '%s\n' "$session_record" | cut -d: -f6)
+test "$session_uid" -ge 1000 && test "$session_uid" -ne 65534 ||
+	fail "invalid desktop uid: $session_uid"
+test -d "$session_home" || fail "desktop home is absent: $session_home"
+phosh=$(pgrep -o -u "$session_uid" -x phosh 2>/dev/null || true)
+test -n "$phoc" && test -n "$phosh" || fail 'Phosh desktop is absent'
+test "$(ps -eo user,args | awk -v user="$session_user" '$1 == user && $0 ~ /\/usr\/bin\/phosh-osk-stevia --allow-replacement/ {n++} END {print n+0}')" = 1 || fail 'touch keyboard instance count is not one'
+fcitx_count=$(pgrep -u "$session_uid" -x fcitx5 2>/dev/null | wc -l)
+fcitx_override=$session_home/.config/autostart/org.fcitx.Fcitx5.desktop
+if test -r "$fcitx_override" && grep -qx 'Hidden=true' "$fcitx_override" &&
+	grep -qx 'X-GNOME-Autostart-enabled=false' "$fcitx_override"; then
+	test "$fcitx_count" = 0 || fail 'Fcitx5 is running despite the disabled XDG override'
+else
+	test "$fcitx_count" = 1 || fail 'Fcitx5 instance count is not one'
+fi
+pass graphical-session
+
+for service in networkmanager m1892-clock m1892-power m1892-sensors \
+	m1892-radio-bootstrap \
+	m1892-cellular-prepare m1892-ufs-policy m1892-venus-coldload-r521 docker; do
+	rc-service "$service" status >/dev/null 2>&1 || fail "service is not running: $service"
+done
+# Recovery acceptance can inherit the exact RAM-shadow rmtfs instance from an
+# older owner wrapper.  m1892-rmtfs-shadow deliberately records that mode and
+# exits instead of starting a second server, so OpenRC eventually reports the
+# wrapper stopped even though the one valid server remains healthy.  Accept
+# only that tightly described compatibility state; a fresh public boot must
+# keep the supervised service running normally.
+rmtfs_mode=supervised
+if test -r /run/m1892-rmtfs-shadow.state &&
+	grep -qx 'mode=inherited' /run/m1892-rmtfs-shadow.state; then
+	grep -qx 'outcome=pass' /run/m1892-rmtfs-shadow.state || fail 'RMTFS inherited outcome is not pass'
+	grep -qx 'backing=ram-shadow' /run/m1892-rmtfs-shadow.state || fail 'RMTFS inherited backing is not RAM shadow'
+	inherited_rmtfs=$(pgrep -o -x rmtfs 2>/dev/null || true)
+	test -n "$inherited_rmtfs" || fail 'RMTFS inherited process is absent'
+	case $(tr '\000' ' ' <"/proc/$inherited_rmtfs/cmdline" 2>/dev/null || true) in
+		*'-o /run/m1892-rmtfs'*) ;;
+		*) fail 'RMTFS inherited process has unexpected arguments' ;;
+	esac
+	rmtfs_mode=inherited
+elif ! rc-service m1892-rmtfs-shadow status >/dev/null 2>&1; then
+	fail 'RMTFS shadow service is not running'
+fi
+for service in usb-signaller nftables postmarketos-zram-swap; do
+	test ! -L "/etc/runlevels/default/$service" || fail "unsupported service remains enabled: $service"
+done
+test ! -L /etc/runlevels/default/m1892-screen-idle || fail 'obsolete screen idle service remains enabled'
+test ! -L /etc/runlevels/boot/swclock-offset-boot || fail 'generic rtc0 boot clock remains enabled'
+test ! -L /etc/runlevels/shutdown/swclock-offset-shutdown || fail 'generic rtc0 shutdown clock remains enabled'
+test -z "$(pgrep -u "$session_uid" -f '/usr/local/libexec/m1892-screen-idle.py' 2>/dev/null || true)" || fail 'obsolete screen idle watcher is running'
+
+session_bus=$(tr '\000' '\n' <"/proc/$phoc/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -1)
+test -n "$session_bus" || fail 'Phosh session bus is unavailable'
+user_gsettings()
+{
+	setpriv --reuid="$session_uid" --regid="$session_gid" --init-groups \
+		env HOME="$session_home" USER="$session_user" LOGNAME="$session_user" \
+		XDG_RUNTIME_DIR="/run/user/$session_uid" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
+		gsettings get "$1" "$2"
+}
+test "$(user_gsettings org.gnome.desktop.session idle-delay)" = 'uint32 120' || fail 'native idle delay is not 120 seconds'
+test "$(user_gsettings org.gnome.desktop.screensaver lock-enabled)" = false || fail 'screen blanking unexpectedly locks the development session'
+test "$(user_gsettings org.gnome.desktop.screensaver lock-delay)" = 'uint32 0' || fail 'screen lock delay is not zero'
+test "$(user_gsettings org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type)" = "'nothing'" || fail 'AC idle unexpectedly triggers suspend'
+test "$(user_gsettings org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type)" = "'nothing'" || fail 'battery idle unexpectedly triggers suspend'
+pass native-idle-policy
+pidof ModemManager >/dev/null || fail 'ModemManager is absent'
+busctl status org.freedesktop.ModemManager1 >/dev/null 2>&1 || fail 'ModemManager D-Bus ownership is absent'
+rc-service iio-sensor-proxy status >/dev/null 2>&1 || fail 'sensor proxy is not running'
+sensor_props=$(gdbus call --system --dest net.hadess.SensorProxy \
+	--object-path /net/hadess/SensorProxy \
+	--method org.freedesktop.DBus.Properties.GetAll net.hadess.SensorProxy \
+	2>/dev/null || true)
+printf '%s\n' "$sensor_props" | grep -q "'HasAccelerometer': <true>" ||
+	fail 'sensor proxy has no accelerometer'
+test "$(user_gsettings org.gnome.settings-daemon.peripherals.touchscreen orientation-lock)" = false ||
+	fail 'desktop orientation lock is enabled'
+pass service-ownership
+
+test -S /var/run/docker.sock || fail 'Docker API socket is absent'
+test -x /usr/local/sbin/m1892-docker-selftest || fail 'Docker self-test is absent'
+docker info >/dev/null 2>&1 || fail 'Docker daemon is not responding'
+for option in NETFILTER_XT_NAT NETFILTER_XT_TARGET_REDIRECT NF_NAT NF_TABLES; do
+	gzip -dc /proc/config.gz | grep -qx "CONFIG_${option}=y" ||
+		fail "Docker kernel option is absent: CONFIG_$option"
+done
+docker_group=$(getent group docker 2>/dev/null || true)
+docker_members=$(printf '%s\n' "$docker_group" | cut -d: -f4)
+printf ',%s,\n' "$docker_members" | grep -Fq ",$session_user," ||
+	fail 'desktop account is not in the docker group'
+pass docker-runtime
+
+test -x /usr/bin/rmtfs || fail 'distribution rmtfs binary is absent'
+test "$(pgrep -x rmtfs 2>/dev/null | wc -l)" = 1 || fail 'rmtfs instance count is not one'
+if test "$rmtfs_mode" = inherited; then
+	test "$(pgrep -x tqftpserv 2>/dev/null | wc -l)" = 2 || fail 'recovery tqftpserv instance count is not two'
+	tqftp_old=0
+	tqftp_root=0
+	for tqftp_pid in $(pgrep -x tqftpserv 2>/dev/null); do
+		case $(tr '\000' ' ' <"/proc/$tqftp_pid/cmdline" 2>/dev/null || true) in
+			'/usr/sbin/tqftpserv ') tqftp_old=$((tqftp_old + 1)) ;;
+			'/usr/bin/tqftpserv ') tqftp_root=$((tqftp_root + 1)) ;;
+			*) fail 'recovery tqftpserv process has unexpected arguments' ;;
+		esac
+	done
+	test "$tqftp_old" = 1 && test "$tqftp_root" = 1 || fail 'recovery tqftpserv ownership is ambiguous'
+	rc-service tqftpserv status >/dev/null 2>&1 || fail 'root tqftpserv service is not running'
+else
+	test "$(pgrep -x tqftpserv 2>/dev/null | wc -l)" = 1 || fail 'tqftpserv instance count is not one'
+	rc-service tqftpserv status >/dev/null 2>&1 || fail 'tqftpserv service is not running'
+fi
+grep -qx 'outcome=pass' /run/m1892-radio-bootstrap.state || fail 'radio bootstrap did not pass'
+grep -qx 'pd_mapper=loaded' /run/m1892-radio-bootstrap.state ||
+	fail 'radio bootstrap did not record PD mapper ownership'
+test -d /sys/module/qcom_pd_mapper || fail 'qcom_pd_mapper is not active'
+test -L /lib/firmware/qcom/sdm845/m1892/wlanmdsp.mbn ||
+	fail 'WLAN protection-domain firmware alias is absent'
+test "$(readlink /lib/firmware/qcom/sdm845/m1892/wlanmdsp.mbn)" = \
+	../../../ath10k/WCN3990/hw1.0/wlanmdsp.mbn ||
+	fail 'WLAN protection-domain firmware alias is incorrect'
+grep -qx 'radio_stable_seconds=30' /run/m1892-radio-bootstrap.state ||
+	fail 'radio bootstrap stability gate was not completed'
+remoteproc=$(sed -n 's/^remoteproc=//p' /run/m1892-radio-bootstrap.state | head -1)
+test -n "$remoteproc" || fail 'radio bootstrap did not record MPSS remoteproc'
+test "$(cat "/sys/class/remoteproc/$remoteproc/state")" = running || fail 'MPSS is not running'
+test -d /sys/class/net/wlan0 || fail 'wlan0 is absent after radio bootstrap'
+pass radio-runtime
+
+test -e /dev/video0 && test -e /dev/video1 || fail 'Venus video nodes are absent'
+test "$(cat /sys/class/video4linux/video0/name)" = qcom-venus-decoder -o \
+	"$(cat /sys/class/video4linux/video1/name)" = qcom-venus-decoder ||
+	fail 'Venus decoder node is absent'
+test "$(cat /sys/class/video4linux/video0/name)" = qcom-venus-encoder -o \
+	"$(cat /sys/class/video4linux/video1/name)" = qcom-venus-encoder ||
+	fail 'Venus encoder node is absent'
+test "$(cat /sys/bus/platform/devices/aa00000.video-codec/power/runtime_status)" = suspended ||
+	fail 'Venus is not runtime suspended while idle'
+pass venus-hardware-codec
+
+# Physical testing proved that ordinary screen blanking hard-resets M1892 when the DSI PHY
+# runtime-suspends.  The product kernel must keep only this PHY runtime-active;
+# DPU, DSI host, panel and regulators still follow their normal blanking path.
+dsi_phy_power=/sys/bus/platform/devices/ae94400.phy/power
+test -d "$dsi_phy_power" || fail 'M1892 DSI PHY power state is absent'
+test "$(cat "$dsi_phy_power/control")" = on ||
+	fail 'M1892 DSI PHY runtime-suspend guard is absent'
+pass display-blank-runtime-guard
+
+if nmcli -t -f TYPE,STATE connection show --active | grep -qx '802-11-wireless:activated'; then
+	ip link show wlan0 | grep -q 'state UP' || fail 'Wi-Fi profile is active but wlan0 is down'
+	pass wifi-active
+else
+	echo M1892_DAILY_HEALTH_INFO: wifi-offline
+fi
+
+if nmcli -t -f TYPE,STATE connection show --active | grep -qx 'gsm:activated'; then
+	pidof ModemManager >/dev/null || fail 'cellular profile is active without ModemManager'
+	pass cellular-active
+else
+	echo M1892_DAILY_HEALTH_INFO: cellular-offline
+fi
+
+if dmesg | grep -Ei 'rcu[_ -].*stall|detected stalls on CPU|I/O error|EXT4-fs error|ufs.*(fatal|abort)|Kernel panic|Internal error: Oops' >/dev/null; then
+	fail 'critical kernel error is present in dmesg'
+fi
+# Current firmware can perform one bounded WLAN calibration crash/recovery on
+# a cold boot.  Accept it only when the last MPSS crash is followed by ath10k's
+# explicit successful-recovery marker and all final runtime gates above pass.
+if ! dmesg | awk '
+	/crash detected in 4080000\.remoteproc/ {
+		crashes++; saw_crash=1; recovered=0
+	}
+	/fatal error received:.*wlan_process/ {
+		saw_crash=1; recovered=0
+	}
+	/ath10k_snoc .*device successfully recovered/ { if (saw_crash) recovered=1 }
+	END { exit (crashes > 1 || (saw_crash && !recovered)) ? 1 : 0 }
+'; then
+	fail 'MPSS/WLAN crash count or recovery outcome is outside the accepted gate'
+fi
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 error appeared during audit'
+pass kernel-log
+
+echo "M1892_DAILY_HEALTH_OK boot_id=$(cat /proc/sys/kernel/random/boot_id) uptime=$(cut -d' ' -f1 /proc/uptime)"

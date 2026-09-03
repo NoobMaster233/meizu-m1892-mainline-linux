@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+# Stable daily interface.  The underlying offset implementation has no image
+# or release gate; only restore-at-boot and save-at-shutdown are used.
+case ${1:-} in
+	restore|save) exec /usr/local/sbin/m1892-clock-r186-pmos "$1" ;;
+	*) echo "usage: $0 {restore|save}" >&2; exit 2 ;;
+esac

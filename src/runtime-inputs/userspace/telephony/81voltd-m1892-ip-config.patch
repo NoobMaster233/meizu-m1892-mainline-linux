@@ -1,0 +1,194 @@
+diff --git a/qvd-connection.c b/qvd-connection.c
+index 2d7fa0a..9be8f26 100644
+--- a/qvd-connection.c
++++ b/qvd-connection.c
+@@ -6,6 +6,9 @@
+ 
+ #include <libmm-glib.h>
++#include <errno.h>
++#include <fcntl.h>
+ #include <stdbool.h>
++#include <unistd.h>
+ 
+ #include "qvd-connection.h"
+ 
+@@ -107,17 +110,17 @@ void qvd_connection_get_handles(const QVDConnection *conn,
+ 		*local_id = conn->local_id;
+ }
+ 
+-static void try_notify_address(QVDConnection *conn,
+-			       GVariant *changed,
+-			       MMBearerIpFamily ip_type,
+-			       const gchar *conf_name)
++static gboolean try_notify_address(QVDConnection *conn,
++                                   GVariant *changed,
++                                   MMBearerIpFamily ip_type,
++                                   const gchar *conf_name)
+ {
+ 	GVariant *ip_conf;
+ 	gchar *addr = NULL;
+ 
+ 	ip_conf = g_variant_lookup_value(changed, conf_name, G_VARIANT_TYPE_DICTIONARY);
+ 	if (ip_conf == NULL)
+-		return;
++		return FALSE;
+ 
+ 	g_variant_lookup(ip_conf, "address", "s", &addr);
+ 
+@@ -127,6 +130,9 @@ static void try_notify_address(QVDConnection *conn,
+ 	} else {
+ 		g_free(addr);
+ 	}
++
++	g_variant_unref(ip_conf);
++	return TRUE;
+ }
+ 
+ void qvd_connection_set_handles(QVDConnection *conn,
+@@ -125,6 +128,126 @@ void qvd_connection_set_handles(QVDConnection *conn,
+ 	conn->local_id = local_id;
+ }
+ 
++/*
++ * ModemManager creates the multiplexed IMS bearer on M1892, but does not
++ * configure the resulting qmapmux netdev because the bearer was requested by
++ * the modem through IMSD rather than by NetworkManager.  The modem cannot
++ * complete IMS registration until this link has its reported IPv6 address and
++ * route.  Keep this beside bearer ownership in 81voltd so reconnects follow
++ * the same path and do not depend on a polling helper.
++ */
++static gboolean run_ip(gchar **argv)
++{
++	GError *err = NULL;
++	gchar *stderr_buf = NULL;
++	gint status = 0;
++	gboolean ok;
++
++	ok = g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH,
++			  NULL, NULL, NULL, &stderr_buf, &status, &err);
++	if (!ok) {
++		g_warning("Failed to execute ip: %s", err->message);
++		g_clear_error(&err);
++		g_free(stderr_buf);
++		return FALSE;
++	}
++
++	if (!g_spawn_check_wait_status(status, &err)) {
++		g_warning("ip command failed: %s%s%s", err->message,
++			  stderr_buf && *stderr_buf ? ": " : "",
++			  stderr_buf && *stderr_buf ? stderr_buf : "");
++		g_clear_error(&err);
++		g_free(stderr_buf);
++		return FALSE;
++	}
++
++	g_free(stderr_buf);
++	return TRUE;
++}
++
++static gboolean write_sysctl_zero(const gchar *path)
++{
++	int fd;
++	ssize_t written;
++
++	fd = open(path, O_WRONLY | O_CLOEXEC);
++	if (fd < 0) {
++		g_warning("Failed to open %s: %s", path, g_strerror(errno));
++		return FALSE;
++	}
++
++	written = write(fd, "0\n", 2);
++	if (close(fd) < 0 || written != 2) {
++		g_warning("Failed to write %s: %s", path, g_strerror(errno));
++		return FALSE;
++	}
++
++	return TRUE;
++}
++
++static void configure_m1892_ims_link(MMBearer *bearer)
++{
++	MMBearerIpConfig *cfg;
++	const gchar *iface, *address, *gateway;
++	g_autofree gchar *cidr = NULL;
++	g_autofree gchar *accept_dad = NULL;
++	g_autofree gchar *dad_transmits = NULL;
++	guint prefix;
++	gchar *link_argv[] = { "ip", "link", "set", "dev", NULL, "up", NULL };
++	gchar *addr_argv[] = { "ip", "-6", "addr", "replace", NULL,
++			       "dev", NULL, NULL };
++	gchar *route_argv[] = { "ip", "-6", "route", "replace", "default",
++				"via", NULL, "dev", NULL, "metric", "1024", NULL };
++
++	if (!mm_bearer_get_connected(bearer))
++		return;
++
++	iface = mm_bearer_get_interface(bearer);
++	if (!iface || !g_str_has_prefix(iface, "qmapmux"))
++		return;
++
++	cfg = mm_bearer_get_ipv6_config(bearer);
++	if (!cfg)
++		return;
++
++	address = mm_bearer_ip_config_get_address(cfg);
++	gateway = mm_bearer_ip_config_get_gateway(cfg);
++	prefix = mm_bearer_ip_config_get_prefix(cfg);
++	if (!address || !*address || prefix == 0 || prefix > 128) {
++		g_warning("IMS bearer %s has no usable IPv6 configuration", iface);
++		g_object_unref(cfg);
++		return;
++	}
++
++	link_argv[4] = (gchar *)iface;
++	if (!run_ip(link_argv)) {
++		g_object_unref(cfg);
++		return;
++	}
++
++	accept_dad = g_strdup_printf("/proc/sys/net/ipv6/conf/%s/accept_dad", iface);
++	dad_transmits = g_strdup_printf("/proc/sys/net/ipv6/conf/%s/dad_transmits", iface);
++	if (!write_sysctl_zero(accept_dad) || !write_sysctl_zero(dad_transmits))
++		g_warning("Could not disable IPv6 DAD for IMS interface %s", iface);
++
++	cidr = g_strdup_printf("%s/%u", address, prefix);
++	addr_argv[4] = cidr;
++	addr_argv[6] = (gchar *)iface;
++	if (!run_ip(addr_argv)) {
++		g_object_unref(cfg);
++		return;
++	}
++
++	if (gateway && *gateway) {
++		route_argv[6] = (gchar *)gateway;
++		route_argv[8] = (gchar *)iface;
++		run_ip(route_argv);
++	}
++
++	g_info("Configured IMS IPv6 link %s with %s", iface, cidr);
++	g_object_unref(cfg);
++}
++
+ static void on_connect(GObject *obj, GAsyncResult *res, gpointer data)
+ {
+ 	QVDConnection *conn = QVD_CONNECTION(data);
+@@ -137,6 +260,8 @@ static void on_connect(GObject *obj, GAsyncResult *res, gpointer data)
+ 		g_signal_emit(conn, conn_signals[CONNECT_ERR], 0, err);
+ 		g_clear_error(&err);
+ 	}
++	else
++		configure_m1892_ims_link(MM_BEARER(obj));
+ 
+ 	g_object_unref(conn);
+ }
+@@ -202,8 +330,8 @@ static void on_bearer_properties_changed(GDBusProxy* bearer,
+ 	      || conn->ip_type == MM_BEARER_IP_FAMILY_IPV6);
+ 	if (conn->ip_type == MM_BEARER_IP_FAMILY_IPV4)
+ 		try_notify_address(conn, changed, MM_BEARER_IP_FAMILY_IPV4, "Ip4Config");
+-	else
+-		try_notify_address(conn, changed, MM_BEARER_IP_FAMILY_IPV6, "Ip6Config");
++	else if (try_notify_address(conn, changed, MM_BEARER_IP_FAMILY_IPV6, "Ip6Config"))
++		configure_m1892_ims_link(MM_BEARER(bearer));
+ }
+ 
+ void qvd_connection_set_bearer(QVDConnection *conn, MMBearer *bearer)

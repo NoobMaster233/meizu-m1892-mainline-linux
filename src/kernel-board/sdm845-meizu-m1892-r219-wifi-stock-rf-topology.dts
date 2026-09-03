@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R219 diagnostic: mirror the stock single-chain WLAN topology.
+ *
+ * Stock M1892 DT exposes only vdd-3.3-ch0 and the Flyme WCNSS policy forces
+ * both TX and RX to 1x1.  R219 keeps every accepted R159 product property but
+ * removes the later inferred ch1 rail and asks ath10k to seed chainmask 1
+ * before its first firmware start.
+ */
+
+/dts-v1/;
+
+#include "sdm845-meizu-m1892-r159-product.dts"
+
+&wifi {
+	/delete-property/ vdd-3.3-ch1-supply;
+	qcom,ath10k-chainmask = <1>;
+};

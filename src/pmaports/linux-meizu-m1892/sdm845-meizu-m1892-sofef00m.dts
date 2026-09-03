@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 Samsung SOFEF00M panel validation stage.
+ *
+ * Panel rail voltages, enable GPIOs, dimensions, reset GPIO and display
+ * timing are taken from this phone's stock merged DT.  TLMM GPIO6
+ * ("platform-reset-ap-gpio" downstream) is deliberately left untouched in
+ * the first panel candidate: the available downstream DSI panel driver does
+ * not consume that property, while PM8998 GPIO8 carries the stock reset
+ * sequence.  This preserves the firmware state until live evidence says the
+ * second line is required.
+ */
+
+#include "sdm845-meizu-m1892-display-controller.dts"
+
+/ {
+	lcd_vddio: lcd-vddio-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "lcd_vddio_regulator";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-boot-on;
+		enable-active-high;
+		gpio = <&tlmm 51 GPIO_ACTIVE_HIGH>;
+	};
+
+	lcd_vdd: lcd-vdd-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "lcd_vdd_regulator";
+		regulator-min-microvolt = <3000000>;
+		regulator-max-microvolt = <3000000>;
+		regulator-boot-on;
+		enable-active-high;
+		gpio = <&tlmm 26 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&mdss_dsi0 {
+	display_panel: panel@0 {
+		compatible = "samsung,sofef00m";
+		reg = <0>;
+
+		vddio-supply = <&lcd_vddio>;
+		vdd-supply = <&lcd_vdd>;
+
+		reset-gpios = <&pm8998_gpios 8 GPIO_ACTIVE_LOW>;
+		te-gpios = <&tlmm 10 GPIO_ACTIVE_HIGH>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	data-lanes = <0 1 2 3>;
+	remote-endpoint = <&panel_in>;
+};

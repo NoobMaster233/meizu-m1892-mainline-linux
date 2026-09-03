@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R144: Snapdragon Sensor Core (SLPI) bring-up candidate.
+ *
+ * Keep the exact accepted R110 hardware description and enable only the
+ * upstream SDM845 SLPI PAS remote processor.  The firmware name deliberately
+ * targets the split stock MDT/Bxx set; qcom_mdt_loader derives slpi.b00 ...
+ * slpi.b23 from this path without modifying or recombining vendor firmware.
+ *
+ * Userspace services and the PAS/FastRPC modules remain opt-in during the
+ * first boot, so reaching the accepted R116 desktop is still the first gate.
+ */
+
+/dts-v1/;
+
+#include "sdm845-meizu-m1892-r110-conservative-smb2.dts"
+
+&slpi_pas {
+	firmware-name = "qcom/sdm845/Meizu/m1892/slpi.mdt";
+	status = "okay";
+};

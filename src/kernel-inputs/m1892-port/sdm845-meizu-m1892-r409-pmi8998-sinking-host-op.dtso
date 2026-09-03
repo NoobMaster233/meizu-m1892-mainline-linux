@@ -1,0 +1,15 @@
+/dts-v1/;
+/plugin/;
+
+/* R409: supply TCPM's mandatory operating sink power for R408. */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/spmi@c440000/pmic@2/typec@1300/connector";
+
+		__overlay__ {
+			/* Exactly the single 5-V/500-mA sink PDO: 2.5 W. */
+			op-sink-microwatt = <2500000>;
+		};
+	};
+};

@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Generic product-source form of the accepted R86 Bluetooth node.  The
+ * all-zero local-bd-address is a build-layout placeholder, never a device
+ * identity: the product-DTB finalizer verifies and removes it.  At runtime the
+ * R247 userspace helper obtains each unit's factory identity through QMI DMS
+ * before BlueZ starts.
+ */
+
+#include "sdm845-meizu-m1892-r80-rmtfs-address.dts"
+
+/ {
+	vreg_s4a_1p8: vreg-s4a-1p8 {
+		compatible = "regulator-fixed";
+		regulator-name = "vreg_s4a_1p8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+	};
+};
+
+&uart6 {
+	pinctrl-0 = <&qup_uart6_4pin>;
+	status = "okay";
+
+	bluetooth {
+		/* Required only to reproduce the accepted compiled-tree layout. */
+		local-bd-address = [00 00 00 00 00 00];
+		compatible = "qcom,wcn3990-bt";
+		firmware-name = "m1892/crnv21.bin";
+		vddio-supply = <&vreg_s4a_1p8>;
+		vddxo-supply = <&vreg_l7a_1p8>;
+		vddrf-supply = <&vreg_l17a_1p3>;
+		vddch0-supply = <&vreg_l25a_3p3>;
+		max-speed = <3200000>;
+	};
+};

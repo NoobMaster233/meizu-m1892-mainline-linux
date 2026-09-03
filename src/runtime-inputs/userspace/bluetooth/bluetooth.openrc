@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+
+name="Bluetooth"
+command="/usr/lib/bluetooth/bluetoothd"
+pidfile="/run/bluetoothd.pid"
+command_background=true
+
+depend()
+{
+	after coldplug udev-postmount m1892-radio-bootstrap
+	need dbus localmount hostname
+}
+
+# BlueZ opens MGMT first so WCN3990 setup can finish. The post hook then
+# replaces the firmware template address with this handset's factory DMS
+# identity before OpenRC reports Bluetooth ready.
+start_post()
+{
+	/usr/local/sbin/m1892-bluetooth-identity
+}

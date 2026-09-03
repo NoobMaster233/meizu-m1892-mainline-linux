@@ -1,0 +1,9 @@
+M1892 主线 Linux 公开树采用混合许可证。
+
+项目原创脚本与集成代码在文件未另行声明时采用 MIT License；Linux、EDK2、
+postmarketOS/Alpine 及其他上游组件继续适用各自许可证。厂商专有固件不在本
+仓库分发，必须由机主从自己的官方 Flyme 包在本地提取。
+
+完整边界、上游归属和英文说明见 LICENSES.md / LICENSES_EN.md；MIT 全文见
+licenses/MIT.txt。本文件只是仓库级导航，不会把不同来源的代码重新许可为
+同一种许可证。

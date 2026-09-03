@@ -1,0 +1,145 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* R447: muted dual CS35L41 card on stock M1892 QUAT MI2S SD2/GPIO62. */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			m1892_r447_audio_vsys: regulator-audio-vsys-r447 {
+				compatible = "regulator-fixed";
+				regulator-name = "audio_vsys_r447";
+				regulator-always-on;
+				regulator-boot-on;
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/soc@0/pinctrl@3400000";
+		__overlay__ {
+			m1892_r447_spi0_cs1: qup-spi0-r447-cs1-state {
+				pins = "gpio8";
+				function = "qup_l4";
+				drive-strength = <6>;
+				bias-disable;
+			};
+
+			m1892_r447_quat_mi2s: quat-mi2s-r447-active-state {
+				pins = "gpio58", "gpio59";
+				function = "qua_mi2s";
+				drive-strength = <8>;
+				bias-disable;
+				output-high;
+			};
+
+			m1892_r447_quat_mi2s_sd2: quat-mi2s-r447-sd2-active-state {
+				pins = "gpio62";
+				function = "qua_mi2s";
+				drive-strength = <8>;
+				bias-disable;
+			};
+		};
+	};
+
+	fragment@2 {
+		target-path = "/soc@0/geniqup@8c0000/spi@880000";
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			pinctrl-names = "default";
+			pinctrl-0 = <0x3f &m1892_r447_spi0_cs1>;
+			status = "okay";
+
+			m1892_r447_cs0: speaker-amp@0 {
+				compatible = "cirrus,cs35l41";
+				reg = <0>;
+				#sound-dai-cells = <1>;
+				sound-name-prefix = "Left";
+				spi-max-frequency = <4000000>;
+				interrupt-parent = <0x4e>;
+				interrupts = <11 8>;
+				reset-gpios = <0x4e 7 0>;
+				VA-supply = <0x57>;
+				VP-supply = <&m1892_r447_audio_vsys>;
+				cirrus,boost-type = <0>;
+				cirrus,boost-peak-milliamp = <3500>;
+				cirrus,boost-ind-nanohenry = <1000>;
+				cirrus,boost-cap-microfarad = <15>;
+				cirrus,gpio2-output-enable;
+				cirrus,gpio2-src-select = <4>;
+			};
+
+			m1892_r447_cs1: speaker-amp@1 {
+				compatible = "cirrus,cs35l41";
+				reg = <1>;
+				#sound-dai-cells = <1>;
+				sound-name-prefix = "Right";
+				spi-max-frequency = <4000000>;
+				interrupt-parent = <0x4e>;
+				interrupts = <30 8>;
+				reset-gpios = <0x4e 7 0>;
+				VA-supply = <0x57>;
+				VP-supply = <&m1892_r447_audio_vsys>;
+				cirrus,boost-type = <0>;
+				cirrus,boost-peak-milliamp = <3500>;
+				cirrus,boost-ind-nanohenry = <1000>;
+				cirrus,boost-cap-microfarad = <15>;
+				cirrus,gpio2-output-enable;
+				cirrus,gpio2-src-select = <4>;
+			};
+		};
+	};
+
+	fragment@3 {
+		target-path = "/remoteproc-adsp/glink-edge/apr/service@4/dais";
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			dai@22 {
+				reg = <22>;
+				qcom,sd-lines = <2>;
+			};
+		};
+	};
+
+	fragment@4 {
+		target-path = "/sound";
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&m1892_r447_quat_mi2s &m1892_r447_quat_mi2s_sd2>;
+
+			m1892-r447-speaker-dai-link {
+				link-name = "M1892 Speaker Playback";
+
+				cpu {
+					sound-dai = <0xf8 22>;
+				};
+
+				platform {
+					sound-dai = <0xf9>;
+				};
+
+				codec {
+					sound-dai = <&m1892_r447_cs0 0>, <&m1892_r447_cs1 0>;
+				};
+			};
+
+			m1892-r447-mm1-dai-link {
+				link-name = "MultiMedia1";
+
+				cpu {
+					sound-dai = <0xf7 0>;
+				};
+			};
+
+			mm1-dai-link {
+				status = "disabled";
+			};
+		};
+	};
+};
+

@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R59 Adreno 630 candidate with the device-signed ZAP image.
+ *
+ * R58 proved the GPUCC, dedicated SMMU, Adreno component and DRM/devfreq
+ * chain, but Qualcomm's generic DB845c/MTP ZAP image was rejected by the
+ * M1892 secure world with -EINVAL.  Use the squashed ELF extracted from the
+ * official Flyme 8.1.9.0A vendor image under a device-specific path.
+ */
+
+#include "sdm845-meizu-m1892-r58-gpu-probe.dts"
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sdm845/m1892/a630_zap.mbn";
+};

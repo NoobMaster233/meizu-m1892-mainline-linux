@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 standard SDM845 QDSP6 voice-call front end.
+ *
+ * The base tree already contains the upstream q6voice MVM/CVS/CVP services,
+ * but leaves them disabled and does not instantiate a VoiceMMode1 DAI.  This
+ * is the same hostless PCM path used by the upstream OnePlus 6, SHIFT6mq and
+ * Xiaomi SDM845 device trees.  Keep it independent from the accepted HiFi and
+ * CS35L41 routes: q6voiced opens this PCM only while ModemManager reports an
+ * active call.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/remoteproc-adsp/glink-edge/apr/apr-service@9";
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@1 {
+		target-path = "/remoteproc-adsp/glink-edge/apr/apr-service@a";
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@2 {
+		target-path = "/remoteproc-adsp/glink-edge/apr/apr-service@b";
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@3 {
+		target-path = "/remoteproc-adsp/glink-edge/apr/apr-service@9/dais";
+
+		m1892_q6voicedai: __overlay__ {
+			dai@1 {
+				/* VOICEMMODE1 from qcom,q6voice.h. */
+				reg = <1>;
+			};
+		};
+	};
+
+	fragment@4 {
+		target-path = "/sound";
+
+		__overlay__ {
+			m1892-voicemmode1-dai-link {
+				link-name = "VoiceMMode1";
+
+				cpu {
+					sound-dai = <&m1892_q6voicedai 1>;
+				};
+			};
+		};
+	};
+
+	/*
+	 * The SDM845 machine driver applies one SLIMbus channel map per WCD9340
+	 * card.  The retained bring-up-only SLIMBUS_6/AIF4 headphone link wins
+	 * that one-time setup and makes the handset AIF1 links fail card probe.
+	 * That headphone path has never produced audible output on M1892; disable
+	 * it when the standard handset voice path is composed.
+	 */
+	fragment@5 {
+		target-path = "/sound/slim6-dai-link";
+
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+};

@@ -1,0 +1,12 @@
+**
+!scripts/
+!scripts/**
+!src/
+!src/**
+!config/
+!config/**
+!licenses/
+!licenses/**
+!LICENSE
+!LICENSES.md
+!LICENSES_EN.md

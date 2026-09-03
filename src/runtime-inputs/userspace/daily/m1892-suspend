@@ -1,0 +1,163 @@
+#!/bin/sh
+set -eu
+
+ufs=/sys/devices/platform/soc@0/1d84000.ufshc
+pwr=/sys/devices/platform/soc@0/c440000.spmi/spmi-0/0-00/c440000.spmi:pmic@0:pon@800/c440000.spmi:pmic@0:pon@800:pwrkey
+dsi=/sys/bus/platform/devices/ae00000.display-subsystem/ae94000.dsi
+lock=/run/m1892-suspend.lock
+outdir=/var/lib/m1892/power-actions
+session=
+
+fail()
+{
+	echo "M1892_SUSPEND_FAIL: $1" >&2
+	exit 1
+}
+
+saver()
+{
+	setpriv --reuid="$uid" --regid="$uid" --init-groups \
+		env HOME="$home" USER="$user" LOGNAME="$user" \
+		XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS="$dbus" \
+		gdbus call --session --dest org.gnome.ScreenSaver \
+		--object-path /org/gnome/ScreenSaver \
+		--method org.gnome.ScreenSaver.SetActive "$1" >/dev/null
+}
+
+unlock_session()
+{
+	test -n "$session" || return 0
+	loginctl unlock-session "$session"
+}
+
+cleanup()
+{
+	unlock_session >/dev/null 2>&1 || true
+	saver false >/dev/null 2>&1 || true
+	rmdir "$lock" >/dev/null 2>&1 || true
+}
+
+case ${1:-} in check|suspend) action=$1 ;; *) echo "usage: $0 {check|suspend}" >&2; exit 2 ;; esac
+
+test "$(id -u)" = 0 || fail 'root required'
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS is not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 has recorded errors'
+test "$(cat "$ufs/auto_hibern8")" = 150000 || fail 'UFS AH8 policy is not active'
+test "$(cat "$ufs/rpm_lvl")" = 0 || fail 'UFS runtime PM quarantine is not active'
+test "$(cat "$ufs/spm_lvl")" = 3 || fail 'UFS system PM policy is not active'
+test "$(cat "$ufs/spm_target_dev_state")" = SLEEP || fail 'UFS system device target is not SLEEP'
+test "$(cat "$ufs/spm_target_link_state")" = HIBERN8 || fail 'UFS system link target is not HIBERN8'
+test "$(cat /sys/power/mem_sleep)" = '[s2idle]' || fail 's2idle is unavailable'
+test "$(cat "$pwr/power/wakeup")" = enabled || fail 'power-key wake is disabled'
+if test -r /sys/devices/platform/rtc-efi.0/power/wakeup; then
+	test "$(cat /sys/devices/platform/rtc-efi.0/power/wakeup)" = disabled || fail 'broken EFI RTC wake source is enabled'
+fi
+test -x /usr/bin/loginctl || fail 'elogind client is absent'
+
+phoc_pid=$(pgrep -o -x phoc 2>/dev/null || true)
+test -n "$phoc_pid" || fail 'desktop compositor is absent'
+uid=$(awk '/^Uid:/ { print $2; exit }' "/proc/$phoc_pid/status")
+record=$(getent passwd "$uid" 2>/dev/null || true)
+test -n "$record" || fail "desktop account is absent for uid $uid"
+user=$(printf '%s\n' "$record" | cut -d: -f1)
+gid=$(printf '%s\n' "$record" | cut -d: -f4)
+home=$(printf '%s\n' "$record" | cut -d: -f6)
+test "$uid" -ge 1000 && test "$uid" -ne 65534 || fail "invalid desktop uid: $uid"
+test -d "$home" || fail "desktop home is absent: $home"
+phosh_pid=$(pgrep -o -u "$uid" -x phosh 2>/dev/null || true)
+test -n "$phoc_pid" && test -n "$phosh_pid" || fail 'desktop session is absent'
+dbus=$(tr '\0' '\n' <"/proc/$phosh_pid/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -1)
+test -n "$dbus" || fail 'desktop D-Bus is absent'
+
+for candidate in $(loginctl list-sessions --no-legend 2>/dev/null |
+	awk -v uid="$uid" -v user="$user" '$2 == uid && $3 == user { print $1 }'); do
+	test "$(loginctl show-session "$candidate" -p Active --value)" = yes || continue
+	test "$(loginctl show-session "$candidate" -p Remote --value)" = no || continue
+	test "$(loginctl show-session "$candidate" -p Seat --value)" = seat0 || continue
+	session=$candidate
+	break
+done
+test -n "$session" || fail 'active local seat0 session is absent'
+
+gsettings_get()
+{
+	setpriv --reuid="$uid" --regid="$gid" --init-groups \
+		env HOME="$home" USER="$user" LOGNAME="$user" \
+		XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS="$dbus" \
+		gsettings get "$1" "$2"
+}
+
+test "$(gsettings_get org.gnome.desktop.screensaver lock-enabled)" = false || fail 'desktop lock is enabled'
+test "$(gsettings_get org.gnome.desktop.lockdown disable-lock-screen)" = true || fail 'lock-screen disable policy is absent'
+test "$(gsettings_get sm.puri.phosh.lockscreen require-unlock)" = false || fail 'Phosh still requires unlock'
+
+if test "$action" = check; then
+	echo "M1892_SUSPEND_READY s2idle=yes powerkey=enabled local_lock=disabled-development image_gate=none inhibitors=elogind session=$session"
+	exit 0
+fi
+
+mkdir "$lock" 2>/dev/null || fail 'another power action is active'
+trap cleanup EXIT HUP INT TERM
+install -d -m 0700 "$outdir"
+out=$outdir/suspend-last.log
+boot_id=$(cat /proc/sys/kernel/random/boot_id)
+success_before=$(cat /sys/power/suspend_stats/success)
+{
+	echo action=suspend
+	echo request_epoch="$(date +%s)"
+	echo boot_id="$boot_id"
+	echo suspend_success_before="$success_before"
+	echo image_identity=informational-only
+	echo boot_sha256="$(sha256sum /dev/disk/by-partlabel/boot | awk '{print $1}')"
+	echo recovery_sha256="$(sha256sum /dev/disk/by-partlabel/recovery | awk '{print $1}')"
+} >"$out"
+
+saver true
+attempt=0
+while test "$(cat "$dsi/power/runtime_status")" != suspended; do
+	attempt=$((attempt + 1))
+	test "$attempt" -lt 100 || fail 'display did not suspend'
+	sleep 0.1
+done
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 error before suspend'
+sync
+echo entry_epoch="$(date +%s)" >>"$out"
+
+# Use elogind instead of writing /sys/power/state directly.  This preserves
+# NetworkManager/ModemManager delay hooks and respects SSH/APK sleep inhibitors.
+loginctl suspend
+
+echo resume_epoch="$(date +%s)" >>"$out"
+unlock_session
+saver false
+attempt=0
+while test "$(cat "$dsi/power/runtime_status")" != active; do
+	attempt=$((attempt + 1))
+	test "$attempt" -lt 100 || fail 'display did not resume'
+	sleep 0.1
+done
+
+attempt=0
+while :; do
+	success_after=$(cat /sys/power/suspend_stats/success)
+	test "$success_after" -gt "$success_before" && break
+	attempt=$((attempt + 1))
+	test "$attempt" -lt 100 || fail 'kernel did not record a successful suspend'
+	sleep 0.1
+done
+test "$success_after" -gt "$success_before" || fail 'kernel did not record a successful suspend'
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$boot_id" || fail 'phone rebooted instead of resuming'
+test "$(pgrep -o -u "$uid" -x phoc)" = "$phoc_pid" || fail 'Phoc restarted'
+test "$(pgrep -o -u "$uid" -x phosh)" = "$phosh_pid" || fail 'Phosh restarted'
+test "$(loginctl show-session "$session" -p LockedHint --value)" = no || fail 'local session remained locked after resume'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS failed after resume'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 error after resume'
+{
+	echo suspend_success_after="$success_after"
+	echo result=pass
+} >>"$out"
+sync -f "$out" 2>/dev/null || sync
+trap - EXIT HUP INT TERM
+rmdir "$lock"
+cat "$out"

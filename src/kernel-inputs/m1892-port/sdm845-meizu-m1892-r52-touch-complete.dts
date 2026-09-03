@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R52 complete Synaptics RMI4 touch candidate.
+ *
+ * Evidence combined here:
+ *   - stock I2C5 address 0x20 at 100 kHz;
+ *   - stock PM8998 L14 bus/IO rail and L28 analog rail;
+ *   - stock TLMM GPIO125 interrupt and GPIO126 reset steady state;
+ *   - upstream syna,rmi4-i2c binding and SDM845 handset examples.
+ *
+ * The upstream RMI4 transport controls vdd/vio and reads the interrupt.  Its
+ * current implementation does not actively toggle reset-gpios, so GPIO126 is
+ * placed directly into the stock deasserted-high steady state.
+ */
+
+#include "sdm845-meizu-m1892-r51-touch-regulators.dts"
+
+&tlmm {
+	touch_default: touch-default-state {
+		irq-pins {
+			pins = "gpio125";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+			input-enable;
+		};
+
+		reset-pins {
+			pins = "gpio126";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+			output-high;
+		};
+	};
+};
+
+&i2c5 {
+	touchscreen: touchscreen@20 {
+		compatible = "syna,rmi4-i2c";
+		reg = <0x20>;
+
+		interrupts-extended = <&tlmm 125 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&touch_default>;
+
+		/* Mainline names: analog/core first, then bus I/O. */
+		vdd-supply = <&touch_avdd_2p856>;
+		vio-supply = <&touch_vdd_1p8>;
+
+		syna,startup-delay-ms = <50>;
+		syna,reset-delay-ms = <50>;
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		rmi4-f01@1 {
+			reg = <0x01>;
+			syna,nosleep-mode = <1>;
+		};
+
+		rmi4-f11@11 {
+			reg = <0x11>;
+			syna,sensor-type = <1>;
+		};
+
+		rmi4-f12@12 {
+			reg = <0x12>;
+			syna,sensor-type = <1>;
+		};
+	};
+};

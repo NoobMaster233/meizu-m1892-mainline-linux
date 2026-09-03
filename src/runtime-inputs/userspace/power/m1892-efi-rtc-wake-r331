@@ -1,0 +1,51 @@
+#!/bin/sh
+# Disable the unusable EFI RTC as a wake source without removing rtc0 or
+# changing the validated rtc1 PM8998 numbering used by the M1892 clock service.
+
+set -eu
+
+EFI_DEV=/sys/devices/platform/rtc-efi.0
+RTC0=/sys/class/rtc/rtc0
+RTC1=/sys/class/rtc/rtc1
+OUTDIR=/var/lib/m1892/efi-rtc-wake
+OUT="$OUTDIR/last.log"
+
+mkdir -p "$OUTDIR"
+
+{
+	echo "stamp=$(date -u +%Y%m%dT%H%M%SZ)"
+	echo "boot_id=$(cat /proc/sys/kernel/random/boot_id)"
+	echo "rtc0_name=$(cat "$RTC0/name" 2>/dev/null || true)"
+	echo "rtc1_name=$(cat "$RTC1/name" 2>/dev/null || true)"
+} > "$OUT"
+
+test "$(cat "$RTC0/name")" = 'rtc-efi rtc-efi.0' || {
+	echo "abort=rtc0_provider_changed" >> "$OUT"
+	exit 1
+}
+test "$(cat "$RTC1/name")" = 'rtc-pm8xxx c440000.spmi:pmic@0:rtc@6000' || {
+	echo "abort=rtc1_provider_changed" >> "$OUT"
+	exit 1
+}
+test -w "$EFI_DEV/power/wakeup" || {
+	echo "abort=efi_wakeup_not_writable" >> "$OUT"
+	exit 1
+}
+
+printf 'disabled\n' > "$EFI_DEV/power/wakeup"
+test "$(cat "$EFI_DEV/power/wakeup")" = disabled || {
+	echo "abort=efi_wakeup_disable_failed" >> "$OUT"
+	exit 1
+}
+
+WC="$(timeout 3 cat /sys/power/wakeup_count 2>/dev/null || true)"
+test -n "$WC" || {
+	echo "abort=wakeup_count_still_blocked" >> "$OUT"
+	exit 1
+}
+
+{
+	echo "efi_wakeup=disabled"
+	echo "wakeup_count=$WC"
+	echo "result=PASS"
+} >> "$OUT"

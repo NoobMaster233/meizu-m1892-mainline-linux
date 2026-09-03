@@ -1,0 +1,19 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * R403 stage A: fixed USB2 data-host with no phone-side VBUS source driver.
+ * This is intended for a powered gamepad/hub experiment where the accessory
+ * supplies VBUS and the phone remains a power sink.  It does not enable the
+ * PMI8998 OTG boost path and therefore cannot backfeed the attached PC.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/usb@a6f8800/usb@a600000";
+
+		__overlay__ {
+			dr_mode = "host";
+		};
+	};
+};

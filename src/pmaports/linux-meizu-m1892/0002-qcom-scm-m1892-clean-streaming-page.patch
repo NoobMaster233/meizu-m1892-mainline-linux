@@ -1,0 +1,313 @@
+From: M1892 mainline bring-up
+Subject: firmware: qcom: avoid coherent MP_ASSIGN allocations on M1892
+
+The M1892 secure-world path does not tolerate dma_alloc_coherent() while
+starting MPSS.  Physical R78 testing proved that a retained ordinary page,
+streaming-mapped during SCM probe, works for both the MP_ASSIGN descriptor
+and the SMCCC extended-argument table.
+
+Keep that validated implementation but remove every bring-up trace marker.
+This patch is a clean standalone replacement for experimental patches 0009
+through 0014; do not apply it on top of that series.
+
+The real QCOM_SCM_MP_ASSIGN call and all memory-protection semantics remain
+unchanged.  The special path is restricted to the meizu,m1892 root
+compatible.
+
+diff --git a/drivers/firmware/qcom/qcom_scm-smc.c b/drivers/firmware/qcom/qcom_scm-smc.c
+index 574930729..40d28db58 100644
+--- a/drivers/firmware/qcom/qcom_scm-smc.c
++++ b/drivers/firmware/qcom/qcom_scm-smc.c
+@@ -7,6 +7,7 @@
+ #include <linux/errno.h>
+ #include <linux/delay.h>
+ #include <linux/mutex.h>
++#include <linux/of.h>
+ #include <linux/slab.h>
+ #include <linux/types.h>
+ #include <linux/firmware/qcom/qcom_scm.h>
+@@ -154,7 +155,10 @@ int __scm_smc_call(struct device *dev, const struct qcom_scm_desc *desc,
+ {
+ 	int arglen = desc->arginfo & 0xf;
+ 	int i, ret;
++	phys_addr_t args_phys = 0;
++	void *args_buf = NULL;
+ 	void *args_virt __free(qcom_tzmem) = NULL;
++	bool m1892_assign;
+ 	gfp_t flag = atomic ? GFP_ATOMIC : GFP_KERNEL;
+ 	u32 smccc_call_type = atomic ? ARM_SMCCC_FAST_CALL : ARM_SMCCC_STD_CALL;
+ 	u32 qcom_smccc_convention = (qcom_convention == SMC_CONVENTION_ARM_32) ?
+@@ -162,6 +166,10 @@ int __scm_smc_call(struct device *dev, const struct qcom_scm_desc *desc,
+ 	struct arm_smccc_res smc_res;
+ 	struct arm_smccc_args smc = {0};
+ 
++	m1892_assign = of_machine_is_compatible("meizu,m1892") &&
++		       desc->svc == QCOM_SCM_SVC_MP &&
++		       desc->cmd == QCOM_SCM_MP_ASSIGN;
++
+ 	smc.args[0] = ARM_SMCCC_CALL_VAL(
+ 		smccc_call_type,
+ 		qcom_smccc_convention,
+@@ -172,32 +180,45 @@ int __scm_smc_call(struct device *dev, const struct qcom_scm_desc *desc,
+ 		smc.args[i + SCM_SMC_FIRST_REG_IDX] = desc->args[i];
+ 
+ 	if (unlikely(arglen > SCM_SMC_N_REG_ARGS)) {
+-		struct qcom_tzmem_pool *mempool = qcom_scm_get_tzmem_pool();
++		if (m1892_assign) {
++			ret = qcom_scm_m1892_ext_args_prepare(
++				&args_buf, &args_phys,
++				SCM_SMC_N_EXT_ARGS * sizeof(u64));
++			if (ret)
++				return ret;
++		} else {
++			struct qcom_tzmem_pool *mempool =
++				qcom_scm_get_tzmem_pool();
+ 
+-		if (!mempool)
+-			return -EINVAL;
++			if (!mempool)
++				return -EINVAL;
+ 
+-		args_virt = qcom_tzmem_alloc(mempool,
++			args_virt = qcom_tzmem_alloc(mempool,
+ 					     SCM_SMC_N_EXT_ARGS * sizeof(u64),
+ 					     flag);
+-		if (!args_virt)
+-			return -ENOMEM;
++			if (!args_virt)
++				return -ENOMEM;
++			args_buf = args_virt;
++			args_phys = qcom_tzmem_to_phys(args_virt);
++		}
+ 
+ 		if (qcom_smccc_convention == ARM_SMCCC_SMC_32) {
+-			__le32 *args = args_virt;
++			__le32 *args = args_buf;
+ 
+ 			for (i = 0; i < SCM_SMC_N_EXT_ARGS; i++)
+ 				args[i] = cpu_to_le32(desc->args[i +
+ 						      SCM_SMC_FIRST_EXT_IDX]);
+ 		} else {
+-			__le64 *args = args_virt;
++			__le64 *args = args_buf;
+ 
+ 			for (i = 0; i < SCM_SMC_N_EXT_ARGS; i++)
+ 				args[i] = cpu_to_le64(desc->args[i +
+ 						      SCM_SMC_FIRST_EXT_IDX]);
+ 		}
+ 
+-		smc.args[SCM_SMC_LAST_REG_IDX] = qcom_tzmem_to_phys(args_virt);
++		if (m1892_assign)
++			qcom_scm_m1892_ext_args_sync_for_device();
++		smc.args[SCM_SMC_LAST_REG_IDX] = args_phys;
+ 	}
+ 
+ 	ret = __scm_smc_do(dev, &smc, &smc_res, atomic);
+diff --git a/drivers/firmware/qcom/qcom_scm.c b/drivers/firmware/qcom/qcom_scm.c
+index 9b06a69d3..351b6ccd4 100644
+--- a/drivers/firmware/qcom/qcom_scm.c
++++ b/drivers/firmware/qcom/qcom_scm.c
+@@ -19,6 +19,7 @@
+ #include <linux/interconnect.h>
+ #include <linux/interrupt.h>
+ #include <linux/kstrtox.h>
++#include <linux/mm.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/of_address.h>
+@@ -29,6 +30,7 @@
+ #include <linux/reset-controller.h>
+ #include <linux/remoteproc.h>
+ #include <linux/sizes.h>
++#include <linux/smp.h>
+ #include <linux/types.h>
+ 
+ #include <dt-bindings/interrupt-controller/arm-gic.h>
+@@ -56,6 +58,12 @@ struct qcom_scm {
+ 	struct mutex scm_bw_lock;
+ 	int scm_vote_count;
+ 
++	/* M1892 MP_ASSIGN descriptor retained from early probe */
++	struct mutex m1892_assign_lock;
++	void *m1892_assign_page;
++	dma_addr_t m1892_assign_dma;
++	bool m1892_assign_mapped;
++
+ 	u64 dload_mode_addr;
+ 
+ 	struct qcom_tzmem_pool *mempool;
+@@ -159,6 +167,32 @@ static const char * const download_mode_name[] = {
+ 
+ static struct qcom_scm *__scm;
+ 
++int qcom_scm_m1892_ext_args_prepare(void **virt, phys_addr_t *phys,
++				     size_t size)
++{
++	if (!__scm || !__scm->m1892_assign_page ||
++	    !__scm->m1892_assign_mapped ||
++	    size > PAGE_SIZE - M1892_ASSIGN_EXT_OFFSET)
++		return -EINVAL;
++
++	lockdep_assert_held(&__scm->m1892_assign_lock);
++	dma_sync_single_for_cpu(__scm->dev, __scm->m1892_assign_dma,
++				PAGE_SIZE, DMA_TO_DEVICE);
++
++	*virt = __scm->m1892_assign_page + M1892_ASSIGN_EXT_OFFSET;
++	*phys = __scm->m1892_assign_dma + M1892_ASSIGN_EXT_OFFSET;
++	memset(*virt, 0, PAGE_SIZE - M1892_ASSIGN_EXT_OFFSET);
++
++	return 0;
++}
++
++void qcom_scm_m1892_ext_args_sync_for_device(void)
++{
++	lockdep_assert_held(&__scm->m1892_assign_lock);
++	dma_sync_single_for_device(__scm->dev, __scm->m1892_assign_dma,
++				   PAGE_SIZE, DMA_TO_DEVICE);
++}
++
+ static int qcom_scm_clk_enable(void)
+ {
+ 	int ret;
+@@ -1361,13 +1395,16 @@ int qcom_scm_assign_mem(phys_addr_t mem_addr, size_t mem_sz,
+ 	struct qcom_scm_mem_map_info *mem_to_map;
+ 	phys_addr_t mem_to_map_phys;
+ 	phys_addr_t dest_phys;
+-	phys_addr_t ptr_phys;
++	phys_addr_t ptr_phys = 0;
+ 	size_t mem_to_map_sz;
+ 	size_t dest_sz;
+ 	size_t src_sz;
+ 	size_t ptr_sz;
++	bool m1892_streaming_dma;
++	bool m1892_page_locked = false;
+ 	int next_vm;
+ 	__le32 *src;
++	void *ptr;
+ 	int ret, i, b;
+ 	u64 srcvm_bits = *srcvm;
+ 
+@@ -1376,13 +1413,31 @@ int qcom_scm_assign_mem(phys_addr_t mem_addr, size_t mem_sz,
+ 	dest_sz = dest_cnt * sizeof(*destvm);
+ 	ptr_sz = ALIGN(src_sz, SZ_64) + ALIGN(mem_to_map_sz, SZ_64) +
+ 			ALIGN(dest_sz, SZ_64);
+-
+-	void *ptr __free(qcom_tzmem) = qcom_tzmem_alloc(__scm->mempool,
+-							ptr_sz, GFP_KERNEL);
+-	if (!ptr)
++	m1892_streaming_dma = of_machine_is_compatible("meizu,m1892");
++
++	if (m1892_streaming_dma) {
++		if (ptr_sz > M1892_ASSIGN_EXT_OFFSET)
++			return -E2BIG;
++
++		mutex_lock(&__scm->m1892_assign_lock);
++		m1892_page_locked = true;
++		ptr = __scm->m1892_assign_page;
++		ptr_phys = __scm->m1892_assign_dma;
++		if (ptr) {
++			dma_sync_single_for_cpu(__scm->dev, ptr_phys, PAGE_SIZE,
++						DMA_TO_DEVICE);
++			memset(ptr, 0, PAGE_SIZE);
++		}
++	} else {
++		ptr = qcom_tzmem_alloc(__scm->mempool, ptr_sz, GFP_KERNEL);
++		if (ptr)
++			ptr_phys = qcom_tzmem_to_phys(ptr);
++	}
++	if (!ptr) {
++		if (m1892_page_locked)
++			mutex_unlock(&__scm->m1892_assign_lock);
+ 		return -ENOMEM;
+-
+-	ptr_phys = qcom_tzmem_to_phys(ptr);
++	}
+ 
+ 	/* Fill source vmid detail */
+ 	src = ptr;
+@@ -1410,8 +1465,23 @@ int qcom_scm_assign_mem(phys_addr_t mem_addr, size_t mem_sz,
+ 		next_vm |= BIT(newvm->vmid);
+ 	}
+ 
++	if (m1892_streaming_dma) {
++		dma_sync_single_for_device(__scm->dev, ptr_phys, PAGE_SIZE,
++					   DMA_TO_DEVICE);
++		mem_to_map_phys = ptr_phys + ALIGN(src_sz, SZ_64);
++		dest_phys = ptr_phys + ALIGN(mem_to_map_sz, SZ_64) +
++			    ALIGN(src_sz, SZ_64);
++	}
++
+ 	ret = __qcom_scm_assign_mem(__scm->dev, mem_to_map_phys, mem_to_map_sz,
+ 				    ptr_phys, src_sz, dest_phys, dest_sz);
++
++	if (m1892_streaming_dma) {
++		mutex_unlock(&__scm->m1892_assign_lock);
++	} else {
++		qcom_tzmem_free(ptr);
++	}
++
+ 	if (ret) {
+ 		dev_err(__scm->dev,
+ 			"Assign memory protection call failed %d\n", ret);
+@@ -2733,6 +2803,17 @@ static const struct kernel_param_ops download_mode_param_ops = {
+ module_param_cb(download_mode, &download_mode_param_ops, NULL, 0644);
+ MODULE_PARM_DESC(download_mode, "download mode: off/0/N for no dump mode, full/on/1/Y for full dump mode, mini for minidump mode and full,mini for both full and minidump mode together are acceptable values");
+ 
++static void qcom_scm_m1892_assign_page_free(void *data)
++{
++	struct qcom_scm *scm = data;
++
++	if (scm->m1892_assign_mapped)
++		dma_unmap_single(scm->dev, scm->m1892_assign_dma, PAGE_SIZE,
++				 DMA_TO_DEVICE);
++	if (scm->m1892_assign_page)
++		free_page((unsigned long)scm->m1892_assign_page);
++}
++
+ static int qcom_scm_probe(struct platform_device *pdev)
+ {
+ 	struct qcom_tzmem_pool_config pool_config;
+@@ -2750,6 +2831,28 @@ static int qcom_scm_probe(struct platform_device *pdev)
+ 		return ret;
+ 
+ 	mutex_init(&scm->scm_bw_lock);
++	mutex_init(&scm->m1892_assign_lock);
++
++	if (of_machine_is_compatible("meizu,m1892")) {
++		scm->m1892_assign_page = (void *)get_zeroed_page(GFP_KERNEL);
++		if (!scm->m1892_assign_page)
++			return -ENOMEM;
++
++		scm->m1892_assign_dma =
++			dma_map_single(scm->dev, scm->m1892_assign_page,
++				       PAGE_SIZE, DMA_TO_DEVICE);
++		if (dma_mapping_error(scm->dev, scm->m1892_assign_dma)) {
++			free_page((unsigned long)scm->m1892_assign_page);
++			scm->m1892_assign_page = NULL;
++			return -EIO;
++		}
++		scm->m1892_assign_mapped = true;
++
++		ret = devm_add_action_or_reset(scm->dev,
++				qcom_scm_m1892_assign_page_free, scm);
++		if (ret)
++			return ret;
++	}
+ 
+ 	scm->path = devm_of_icc_get(&pdev->dev, NULL);
+ 	if (IS_ERR(scm->path))
+diff --git a/drivers/firmware/qcom/qcom_scm.h b/drivers/firmware/qcom/qcom_scm.h
+index caab80a73..ef3e7215d 100644
+--- a/drivers/firmware/qcom/qcom_scm.h
++++ b/drivers/firmware/qcom/qcom_scm.h
+@@ -84,6 +84,10 @@ int scm_legacy_call(struct device *dev, const struct qcom_scm_desc *desc,
+ 
+ struct qcom_tzmem_pool *qcom_scm_get_tzmem_pool(void);
+ int qcom_scm_shm_bridge_enable(struct device *scm_dev);
++#define M1892_ASSIGN_EXT_OFFSET	2048UL
++int qcom_scm_m1892_ext_args_prepare(void **virt, phys_addr_t *phys,
++				     size_t size);
++void qcom_scm_m1892_ext_args_sync_for_device(void);
+ 
+ #define QCOM_SCM_SVC_BOOT		0x01
+ #define QCOM_SCM_BOOT_SET_ADDR		0x01

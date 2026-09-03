@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R53 Synaptics RMI4 hardware-reset candidate.
+ *
+ * R52 proved that the controller is an s3508, registers F01/F12 and exposes
+ * event2, but GPIO125 never generated an interrupt.  The stock driver pulses
+ * active-low GPIO126 for 10 ms and waits 50 ms.  The matching mainline binding
+ * already documents reset-gpios, while rmi_i2c did not consume it; R53 pairs
+ * the narrow transport fix with the hardware description and forces F01's
+ * nosleep bit on during bring-up.
+ */
+
+#include "sdm845-meizu-m1892-r52-touch-complete.dts"
+
+&touchscreen {
+	reset-gpios = <&tlmm 126 GPIO_ACTIVE_LOW>;
+
+	rmi4-f01@1 {
+		syna,nosleep-mode = <2>;
+	};
+};

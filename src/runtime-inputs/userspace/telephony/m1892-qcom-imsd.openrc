@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+
+description="Configure and maintain M1892 Qualcomm IMS/VoLTE registration"
+command=/usr/local/sbin/m1892-qcom-imsd
+command_background=true
+pidfile=/run/m1892-qcom-imsd.pid
+output_log=/var/log/m1892-qcom-imsd.log
+error_log=/var/log/m1892-qcom-imsd.log
+
+depend()
+{
+	need modemmanager 81voltd
+	after m1892-radio-bootstrap m1892-cellular-prepare
+	before q6voiced
+}
+
+start_pre()
+{
+	checkpath -d -m 0755 /var/log
+}

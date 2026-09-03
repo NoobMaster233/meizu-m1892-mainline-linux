@@ -1,0 +1,38 @@
+# Reference: <https://postmarketos.org/devicepkg>
+# Experimental local scaffold.  See README.md before attempting to build or flash.
+maintainer="M1892 mainline bring-up <m1892@example.com>"
+pkgname=device-meizu-m1892
+pkgdesc="Meizu 16th Plus"
+pkgver=0
+pkgrel=2
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	firmware-meizu-m1892
+	linux-meizu-m1892
+	mkbootimg
+	postmarketos-base
+	soc-qcom
+"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+	modules-initfs
+"
+
+build() {
+	devicepkg_build "$startdir" "$pkgname"
+}
+
+package() {
+	devicepkg_package "$startdir" "$pkgname"
+}
+
+sha512sums="
+20cc69aa6362105d58b32544de20e13203d90f7043ffd2bade96b8d47c76218c8df6b4fe31b7b5df9864e507a9e64aadb8d00b53285a4943d7f15858cc9766e6  deviceinfo
+8a9f168a93c1b3c47e33e72ad3845e8a6f561521d515ba191738a341a4239866c58fdb7a00c346698b9b8522742ce3147bd8c2ccce47eb730e6a4c088aec5eb0  kernel-cmdline.conf
+c485c49b7bee2a40e52498a13b44555f1dfc16ed1f223ecb2a1846fe51f29f1cb3f769fc6aad8ce7e869faebbde663783fb1fb97801219d23a75c8923ac86b5e  modules-initfs
+"

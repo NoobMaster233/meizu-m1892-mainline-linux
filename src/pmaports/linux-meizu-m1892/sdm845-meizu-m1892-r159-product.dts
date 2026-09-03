@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Generic M1892 product source.  Bluetooth identity is deliberately not part
+ * of the DT: userspace reads each phone's factory address through QMI DMS.
+ * The historical r159 filename is retained only to avoid renaming the package
+ * input; it no longer carries the development phone's address.
+ */
+
+/dts-v1/;
+
+#include "sdm845-meizu-m1892-r144-slpi-sensors.dts"

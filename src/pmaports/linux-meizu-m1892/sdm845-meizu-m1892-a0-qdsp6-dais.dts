@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 A0.5b: expose one ASM front end while keeping the machine sound card
+ * and all speaker amplifiers disabled.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/sound/qcom,q6asm.h>
+
+#include "sdm845-meizu-m1892-a0-wcd9340-enum.dts"
+
+&q6asmdai {
+	dai@0 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>;
+	};
+};
+
+&sound {
+	status = "disabled";
+};

@@ -1,0 +1,2 @@
+ACTION=="add", SUBSYSTEM=="power_supply", KERNEL=="pmi8998-charger", RUN+="/usr/local/sbin/m1892-typec-host-sink-limit-r411"
+ACTION=="change", SUBSYSTEM=="power_supply", KERNEL=="pmi8998-charger", RUN+="/usr/local/sbin/m1892-typec-host-sink-limit-r411"

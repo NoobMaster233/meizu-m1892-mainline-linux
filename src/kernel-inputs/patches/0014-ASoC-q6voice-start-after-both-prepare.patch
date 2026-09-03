@@ -1,0 +1,50 @@
+From: M1892 mainline development <m1892@example.invalid>
+Subject: [PATCH] ASoC: qdsp6: start q6voice from prepare
+
+The M1892 playback-first/capture-first diagnostics and the subsequent
+bidirectional attended call confirmed the startup-order failure.  Start only
+after both hostless directions have completed hardware setup.
+
+diff --git a/sound/soc/qcom/qdsp6/q6voice-dai.c b/sound/soc/qcom/qdsp6/q6voice-dai.c
+index 9f992190c..e7ce8ac78 100644
+--- a/sound/soc/qcom/qdsp6/q6voice-dai.c
++++ b/sound/soc/qcom/qdsp6/q6voice-dai.c
+@@ -24,7 +24,7 @@ static enum q6voice_path_type q6voice_get_path(unsigned int dai_id)
+ 	return Q6VOICE_PATH_COUNT;
+ }
+ 
+-static int q6voice_dai_startup(struct snd_pcm_substream *substream,
++static int q6voice_dai_prepare(struct snd_pcm_substream *substream,
+ 			       struct snd_soc_dai *dai)
+ {
+ 	struct q6voice *v = snd_soc_dai_get_drvdata(dai);
+@@ -53,7 +53,12 @@ static void q6voice_dai_shutdown(struct snd_pcm_substream *substream,
+ }
+ 
+ static const struct snd_soc_dai_ops q6voice_dai_ops = {
+-	.startup = q6voice_dai_startup,
++	/* Starting from .startup races the second direction's hw_params and
++	 * prepare. In particular, capture-first userspace starts Q6Voice when
++	 * playback has only been opened, which can leave the RX path silent.
++	 * Both hostless directions have completed hw_params by the time the
++	 * second .prepare callback starts the bidirectional DSP path. */
++	.prepare = q6voice_dai_prepare,
+ 	.shutdown = q6voice_dai_shutdown,
+ };
+ 
+diff --git a/sound/soc/qcom/qdsp6/q6voice.c b/sound/soc/qcom/qdsp6/q6voice.c
+index 459547401..f4ff3069b 100644
+--- a/sound/soc/qcom/qdsp6/q6voice.c
++++ b/sound/soc/qcom/qdsp6/q6voice.c
+@@ -144,7 +144,10 @@ int q6voice_start(struct q6voice *v, enum q6voice_path_type path, bool capture)
+ 	}
+ 
+ 	if (p->runtime->started & BIT(capture)) {
+-		ret = -EALREADY;
++		/* ALSA may prepare a hostless stream again after an xrun. The
++		 * voice path is already active for this direction, so there is
++		 * nothing to redo and the repeated prepare is successful. */
++		ret = 0;
+ 		goto out;
+ 	}
+ 

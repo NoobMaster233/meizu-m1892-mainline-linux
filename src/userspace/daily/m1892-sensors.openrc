@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+
+description="M1892 SLPI sensors and SensorProxy initialization"
+
+depend()
+{
+	need dbus udev
+	after udev-trigger udev-settle bluetooth m1892-r6-first-boot
+	before networkmanager greetd
+}
+
+start()
+{
+	ebegin "$description"
+	rm -f /run/m1892-sensors.pid /run/m1892-sensors.state /run/m1892-sensors-ready
+	/usr/local/sbin/m1892-sensors start >/var/log/m1892-sensors.log 2>&1 &
+	echo $! >/run/m1892-sensors.pid
+	eend 0
+}
+
+stop()
+{
+	pid=$(cat /run/m1892-sensors.pid 2>/dev/null || true)
+	test -z "$pid" || kill "$pid" 2>/dev/null || true
+	rm -f /run/m1892-sensors.pid /run/m1892-sensors.state /run/m1892-sensors-ready
+}

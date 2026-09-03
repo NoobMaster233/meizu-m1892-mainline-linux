@@ -1,0 +1,55 @@
+# Reference: <https://postmarketos.org/deviceinfo>
+# Experimental local scaffold; direct flashing is not yet supported.
+
+deviceinfo_format_version="0"
+deviceinfo_name="Meizu 16th Plus"
+deviceinfo_manufacturer="Meizu"
+deviceinfo_codename="meizu-m1892"
+deviceinfo_year="2018"
+deviceinfo_arch="aarch64"
+
+# Device related
+deviceinfo_drm="true"
+deviceinfo_chassis="handset"
+deviceinfo_screen_width="1080"
+deviceinfo_screen_height="2160"
+deviceinfo_rootfs_image_sector_size="4096"
+
+# Preserve the USB identity and controller that have passed the autonomous
+# M1892 recovery loop on Windows.  The standard postmarketOS initramfs uses
+# these values for its early NCM gadget before the persistent root is mounted.
+deviceinfo_usb_idVendor="0x1d6b"
+deviceinfo_usb_idProduct="0x0104"
+deviceinfo_usb_serialnumber="M1892MAINLINE"
+deviceinfo_usb_network_function="ncm.usb0"
+deviceinfo_usb_network_udc="a600000.usb"
+deviceinfo_usb_network_host_addr="02:00:00:45:18:93"
+
+# Bootloader related.  The stock ABL exposes fastboot, but a normal mkbootimg
+# image is not accepted at the boot boundary.  Keep flashing disabled until
+# the proven R160/R164 EDK2 outer container and 64 MiB AVB wrapper are
+# integrated as a deterministic pmaports hook.
+deviceinfo_flash_method="none"
+deviceinfo_generate_bootimg="false"
+# The accepted EDK2+stock-AVB wrapper has only 6,877,183 bytes available for
+# the inner ramdisk before the stock VBMeta offset.  Use postmarketOS' standard
+# split-initfs path: stage 1 mounts the ext4 stowaway root and then extracts
+# /boot/initramfs-extra before continuing with fsck/resize/udev.
+deviceinfo_create_initfs_extra="true"
+deviceinfo_initfs_compression="zstd:best"
+
+# Intended values after the EDK2 wrapper gate passes:
+# deviceinfo_flash_method="fastboot"
+# deviceinfo_generate_bootimg="true"
+# deviceinfo_flash_offset_base="0x00000000"
+# deviceinfo_flash_offset_kernel="0x00008000"
+# deviceinfo_flash_offset_ramdisk="0x01000000"
+# deviceinfo_flash_offset_second="0x00f00000"
+# deviceinfo_flash_offset_tags="0x00000100"
+# deviceinfo_flash_pagesize="4096"
+
+# Kernel options.  This DTB name is the intended packaged name; it is not in
+# the shared postmarketOS kernel package yet.
+deviceinfo_dtb="qcom/sdm845-meizu-m1892-r159-product"
+deviceinfo_append_dtb="true"
+deviceinfo_flash_kernel_on_update="false"

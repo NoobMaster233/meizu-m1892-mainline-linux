@@ -1,0 +1,15 @@
+#!/bin/sh
+set -u
+
+state=${XDG_STATE_HOME:-${HOME:?HOME is unset}/.local/state}/m1892
+log=$state/safe-restart.log
+mkdir -p "$state" || exit 1
+chmod 0700 "$state" 2>/dev/null || true
+echo "launch_epoch=$(date +%s)" >>"$log"
+
+/usr/bin/pkexec /usr/local/libexec/m1892-safe-restart-broker restart >>"$log" 2>&1
+rc=$?
+echo "result=fail rc=$rc epoch=$(date +%s)" >>"$log"
+detail=$(tail -n 1 "$log" 2>/dev/null || true)
+/usr/bin/notify-send -u critical -a 'M1892 Power' '安全重启未执行' "$detail" >/dev/null 2>&1 || true
+exit "$rc"

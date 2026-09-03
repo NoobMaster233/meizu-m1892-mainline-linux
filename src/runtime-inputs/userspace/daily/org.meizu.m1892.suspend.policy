@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>M1892 mainline project</vendor>
+  <action id="org.meizu.m1892.manual-suspend">
+    <description>Explicitly suspend M1892</description>
+    <description xml:lang="zh_CN">让 M1892 进入深度休眠</description>
+    <message>Authorization is required to suspend M1892</message>
+    <message xml:lang="zh_CN">需要授权才能让 M1892 进入深度休眠</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>no</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/m1892-suspend-broker</annotate>
+  </action>
+</policyconfig>

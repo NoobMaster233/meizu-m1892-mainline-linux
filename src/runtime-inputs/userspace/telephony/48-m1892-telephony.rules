@@ -1,0 +1,12 @@
+// The daily desktop user belongs to plugdev, the same group used by Alpine's
+// ModemManager policy.  Voice is intentionally absent from the distribution
+// rule, which otherwise leaves GNOME Calls able to display an incoming call
+// but unable to accept, hang up or remove it.  Membership is the authorization
+// boundary because OpenRC does not provide a systemd user unit/session for the
+// XDG-autostarted phone daemon.
+polkit.addRule(function(action, subject) {
+    if (subject.isInGroup("plugdev") &&
+        (action.id == "org.freedesktop.ModemManager1.Voice" ||
+         action.id == "org.freedesktop.ModemManager1.Messaging"))
+        return polkit.Result.YES;
+});

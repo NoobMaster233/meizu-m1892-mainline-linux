@@ -1,0 +1,50 @@
+From: M1892 Mainline Project <m1892-mainline@local>
+Date: Tue, 4 Aug 2026 03:00:00 +0800
+Subject: [PATCH] drm/msm/dsi: balance runtime PM on host power off
+
+msm_dsi_host_power_on() takes one runtime-PM reference before enabling the
+link clocks.  The matching power-off path must release that same reference
+after its final register access and clock disable.
+
+The sdm845/7.1-dev base takes an additional runtime-PM reference at the
+start of msm_dsi_host_power_off(), but performs only one put.  Every
+on-to-off transition therefore leaves the DSI host active and also retains
+its parent display power domain.  This differs from the upstream Linux
+implementation and matches the observed M1892 state: the DRM CRTC and DPU
+are off/suspended while ae94000.dsi remains runtime-active indefinitely.
+
+Remove the redundant get so the existing put balances the power-on
+reference.  The host cannot already be suspended here: power_on is true and
+that retained reference is still held until the final put.
+
+Signed-off-by: M1892 Mainline Project <m1892-mainline@local>
+---
+ drivers/gpu/drm/msm/dsi/dsi_host.c | 6 ------
+ 1 file changed, 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
+index 6bc886b0a..7e42f3ab1 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -2550,7 +2550,6 @@ int msm_dsi_host_power_off(struct mipi_dsi_host *host)
+ {
+ 	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+ 	const struct msm_dsi_cfg_handler *cfg_hnd = msm_host->cfg_hnd;
+-	int ret;
+ 
+ 
+ 	mutex_lock(&msm_host->dev_mutex);
+@@ -2559,11 +2558,6 @@ int msm_dsi_host_power_off(struct mipi_dsi_host *host)
+ 		goto unlock_ret;
+ 	}
+ 
+-	/* Ensure clocks are enabled before register access */
+-	ret = pm_runtime_get_sync(&msm_host->pdev->dev);
+-	if (ret < 0)
+-		pm_runtime_put_noidle(&msm_host->pdev->dev);
+-
+ 	dsi_ctrl_disable(msm_host);
+ 
+ 	pinctrl_pm_select_sleep_state(&msm_host->pdev->dev);
+-- 
+2.47.2

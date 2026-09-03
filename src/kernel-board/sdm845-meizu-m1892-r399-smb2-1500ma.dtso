@@ -1,0 +1,22 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * M1892 R399 conservative internal-SMB2 uplift.
+ *
+ * The stock ATL 3600-mAh battery profile permits 4200 mA, while the upstream
+ * PMI8998 SMB2 driver treats 1500 mA as its ordinary DCP/CDP limit. Use only
+ * that upstream-scale current for the first uplift. HVDCP and the two external
+ * SMB1355 devices remain disabled. APSD continues to restrict a computer SDP
+ * port to 500 mA independently of this battery ceiling.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/battery";
+
+		__overlay__ {
+			constant-charge-current-max-microamp = <1500000>;
+		};
+	};
+};

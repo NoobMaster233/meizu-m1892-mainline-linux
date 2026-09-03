@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 A0.6a: register the QDSP6 multimedia front ends and the WCD9340 AIF1
+ * SLIMbus capture back end.  Speaker amplifiers and routing remain separate so the
+ * accepted CS35L41 playback path can be composed independently.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/sound/qcom,q6asm.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+
+#include "sdm845-meizu-m1892-a0-qdsp6-dais.dts"
+
+&sound {
+	compatible = "qcom,sdm845-sndcard";
+	model = "Meizu 16th Plus";
+	status = "okay";
+
+	mm1-dai-link {
+		link-name = "MultiMedia1";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		};
+	};
+
+	mm2-dai-link {
+		link-name = "MultiMedia2";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		};
+	};
+
+	/*
+	 * Keep all front ends before this back end.  R435 and the Voice5--Voice9
+	 * experiments proved that probing q6routing before MM_DL1 exists makes
+	 * component route creation fail with -ENODEV.  Voice10 passed with this
+	 * exact FE-before-BE ordering.
+	 */
+	slimcap-dai-link {
+		link-name = "SLIM WCD Capture";
+
+		cpu {
+			sound-dai = <&q6afedai SLIMBUS_0_TX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&wcd9340 1>; /* AIF1_CAP */
+		};
+	};
+};

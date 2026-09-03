@@ -1,0 +1,107 @@
+diff --git a/src/qcom_imsd/main.py b/src/qcom_imsd/main.py
+index 4b1bcfb..3baa409 100644
+--- a/src/qcom_imsd/main.py
++++ b/src/qcom_imsd/main.py
+@@ -211,12 +211,11 @@ class OpenIMSD(StateMachine):
+         await self._nas.open()
+         self._opened_services.append(self._nas)
+ 
+-        LOG.debug("Opening PDC service")
+-        self._pdc = PDC(self._device)
+-        await self._pdc.open()
+-        self._opened_services.append(self._pdc)
+-        self._pdc.cb_config_change = self.cb_config_change
+-        await self._pdc.register()
++        # M1892 already exposes the selected carrier PDC profile.  The libqmi
++        # GObject typelib used here does not expose the PDC "config-change"
++        # signal expected by upstream qcom-imsd, so this optional notification
++        # channel must not prevent IMSA/IMSS/NAS/UIM configuration.
++        self._pdc = None
+ 
+         # Opening IMSPrsence service results in an internal error
+         #LOG.debug("Opening IMS presence service")
+@@ -253,6 +253,7 @@ class OpenIMSD(StateMachine):
+         try:
+             await self.connect_services()
+         except:
++            LOG.exception("Failed to connect one or more required QMI services")
+             try:
+                 await self.close()
+             except:
+diff --git a/src/qcom_imsd/services.py b/src/qcom_imsd/services.py
+index 0cf395c..8b3b7aa 100644
+--- a/src/qcom_imsd/services.py
++++ b/src/qcom_imsd/services.py
+@@ -610,18 +610,19 @@ class IMSSettings():
+         svcs = {}
+         ims = await self._imss.get_ims_services_enabled_setting(None, timeout)
+         availables = {
+-            'reg': 'get_ims_registration_service_enable',
+-            'sms': 'get_ims_sms_service_enable',
+-            'ussd': 'get_ims_ussd_service_enable',
+-            'ut': 'get_ims_ut_service_enable',
+-            'vt': 'get_ims_video_telephony_service_enable',
+-            'volte': 'get_ims_voice_service_enable',
+-            'wifi': 'get_ims_voice_wifi_service_enable',
+-            'data': 'get_ims_mobile_data_enable',
++            'reg': ('get_ims_registration_service_enabled', 'get_ims_registration_service_enable'),
++            'sms': ('get_ims_sms_service_enabled', 'get_ims_sms_service_enable'),
++            'ussd': ('get_ims_ussd_service_enabled', 'get_ims_ussd_service_enable'),
++            'ut': ('get_ims_ut_service_enabled', 'get_ims_ut_service_enable'),
++            'vt': ('get_ims_video_telephony_service_enabled', 'get_ims_video_telephony_service_enable'),
++            'volte': ('get_ims_voice_service_enabled', 'get_ims_voice_service_enable'),
++            'wifi': ('get_ims_voice_wifi_service_enabled', 'get_ims_voice_wifi_service_enable'),
++            'data': ('get_ims_mobile_data_enabled', 'get_ims_mobile_data_enable'),
+         }
+ 
+-        for key, fname in availables.items():
+-            func = getattr(ims, fname, None)
++        for key, fnames in availables.items():
++            func = next((getattr(ims, name, None) for name in fnames
++                         if getattr(ims, name, None) is not None), None)
+             if func is None:
+                 svcs[key] = None
+                 continue
+@@ -636,26 +637,29 @@ class IMSSettings():
+         @param svcs: a dict of services and their expected state
+         """
+         available_svcs = {
+-            'reg': 'set_ims_registration_service_enable',
+-            'sms': 'set_ims_sms_service_enable',
+-            'ussd': 'set_ims_ussd_service_enable',
+-            'ut': 'set_ims_ut_service_enable',
+-            'vt': 'set_ims_video_telephony_service_enable',
+-            'volte': 'set_ims_voice_service_enable',
+-            'wifi': 'set_ims_voice_wifi_service_enable',
+-            'data': 'set_ims_mobile_data_enable',
++            'reg': ('set_ims_service_enabled', 'set_ims_registration_service_enable'),
++            'sms': ('set_ims_sms_service_enable',),
++            'ussd': ('set_ims_ussd_service_enabled', 'set_ims_ussd_service_enable'),
++            'ut': ('set_ims_ut_service_enable',),
++            'vt': ('set_ims_video_telephony_service_enable',),
++            'volte': ('set_ims_voice_over_lte_enable', 'set_ims_voice_service_enable'),
++            'wifi': ('set_ims_voice_wifi_service_enable',),
++            'data': ('set_ims_mobile_data_enable',),
+         }
+ 
+         #      Qmi.MessageImsSetImsServicesEnabledSettingInput
+         set_svcs = Qmi.MessageImsSetImsServicesEnabledSettingInput.new()
+         for svc, state in svcs.items():
+-            if svc in available_svcs:
+-                fun = getattr(set_svcs, available_svcs[svc])
+-                fun(state)
++            for fname in available_svcs.get(svc, ()):
++                fun = getattr(set_svcs, fname, None)
++                if fun is not None:
++                    fun(state)
++                    break
+ 
+         # service mask will use 'volte' service
+-        if 'volte' in svcs:
+-            set_svcs.set_ims_service_mask_by_operator_enable(0x3 if svcs['volte'] else 0)
++        set_mask = getattr(set_svcs, 'set_ims_service_mask_by_operator_enable', None)
++        if 'volte' in svcs and set_mask is not None:
++            set_mask(0x3 if svcs['volte'] else 0)
+ 
+         # Set it to preferred mobile
+         set_svcs.set_ims_call_mode_preference(1)

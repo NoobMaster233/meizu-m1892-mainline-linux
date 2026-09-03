@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+
+description="Load M1892 MPSS and WLAN after owner firmware becomes available"
+output_log=/var/log/m1892-radio-bootstrap.log
+error_log=/var/log/m1892-radio-bootstrap.log
+
+depend()
+{
+	need localmount m1892-rmtfs-shadow tqftpserv
+	after modules
+	before networkmanager m1892-cellular-prepare modemmanager
+}
+
+start()
+{
+	ebegin "$description"
+	# Custom OpenRC start functions do not apply output_log/error_log to the
+	# foreground command.  Keep an explicit persistent transcript so a failed
+	# release boot can be diagnosed later from the RAM rescue instead of relying
+	# on a photograph of the console.
+	install -d -m 0755 /var/log
+	echo "M1892_RADIO_BOOTSTRAP_ATTEMPT boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
+		>>/var/log/m1892-radio-bootstrap.log
+	# Put the command in an if-condition so this remains reliable even when the
+	# invoking OpenRC shell enables errexit: the failure status is captured and
+	# returned to OpenRC after the diagnostic has already reached persistent
+	# storage.
+	if /usr/local/sbin/m1892-radio-bootstrap \
+		>>/var/log/m1892-radio-bootstrap.log 2>&1; then
+		status=0
+	else
+		status=$?
+	fi
+	eend "$status"
+	return "$status"
+}

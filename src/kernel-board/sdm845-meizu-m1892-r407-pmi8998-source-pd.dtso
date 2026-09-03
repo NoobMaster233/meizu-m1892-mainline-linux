@@ -1,0 +1,63 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * R407: pair PMI8998's real hardware CC block at 0x1300 with its existing
+ * PM8150B-layout PDPHY at 0x1700 under TCPM.  This first PD gate is deliberately
+ * Source/Host-only and advertises only 5 V / 500 mA.  Pass-through charging and
+ * every voltage above 5 V remain disabled.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/spmi@c440000/pmic@2";
+
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			m1892_pmi8998_typec_pd: typec@1300 {
+				compatible = "qcom,pmi8998-typec";
+				reg = <0x1300>, <0x1700>;
+				interrupts = <0x2 0x13 0x7 0x3>,
+				             <0x2 0x17 0x0 0x1>,
+				             <0x2 0x17 0x1 0x1>,
+				             <0x2 0x17 0x2 0x1>,
+				             <0x2 0x17 0x3 0x1>,
+				             <0x2 0x17 0x4 0x1>,
+				             <0x2 0x17 0x5 0x1>,
+				             <0x2 0x17 0x6 0x1>;
+				interrupt-names = "type-c-change",
+				                  "sig-tx",
+				                  "sig-rx",
+				                  "msg-tx",
+				                  "msg-rx",
+				                  "msg-tx-failed",
+				                  "msg-tx-discarded",
+				                  "msg-rx-discarded";
+				vdd-vbus-supply = <&m1892_otg_vbus>;
+				/* Pinned R404 base: PM8998 LDO24, 3.088 V. */
+				vdd-pdphy-supply = <0xbb>;
+				status = "okay";
+
+				connector {
+					compatible = "usb-c-connector";
+					power-role = "source";
+					data-role = "host";
+					self-powered;
+
+					/* Fixed 5 V / 500 mA, USB communications capable. */
+					source-pdos = <0x04019032>;
+				};
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/otg-vbus-output";
+
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+};

@@ -1,0 +1,61 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+log=/run/m1892-cellular-prepare.log
+exec >"$log" 2>&1
+
+fail() { echo "M1892_CELLULAR_PREPARE_FAIL: $1" >&2; exit 1; }
+case ${1:-start} in start|check) action=${1:-start} ;; *) echo "usage: $0 {start|check}" >&2; exit 2 ;; esac
+
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(tr -d '\000' </sys/firmware/devicetree/base/soc@0/ipa@1e40000/status)" = okay || fail 'IPA is disabled in the live device tree'
+command -v qmicli >/dev/null || fail 'qmicli is absent'
+command -v qrtr-lookup >/dev/null || fail 'qrtr-lookup is absent'
+test -s /lib/firmware/qcom/sdm845/m1892/ipa_fws.mdt || fail 'IPA firmware is absent'
+
+if test "$action" = start; then
+	modprobe ipa || fail 'cannot load IPA driver'
+fi
+attempt=0
+while :; do
+	if test -d /sys/class/net/rmnet_ipa0 && qrtr-lookup 2>/dev/null | grep -qE '^[[:space:]]*2[[:space:]]+1[[:space:]]'; then break; fi
+	attempt=$((attempt + 1)); test "$attempt" -lt 90 || fail 'IPA or QMI DMS did not appear'; sleep 1
+done
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS is not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 has recorded errors'
+
+mode=$(timeout 15 qmicli -d qrtr://0 --dms-get-operating-mode 2>&1) || fail 'cannot read modem mode'
+if ! printf '%s\n' "$mode" | grep -q "Mode: 'online'"; then
+	test "$action" = start || fail 'modem is not online'
+	timeout 20 qmicli -d qrtr://0 --dms-set-operating-mode=online || fail 'cannot set modem online'
+	sleep 3
+fi
+
+attempt=0
+while :; do
+	if status=$(timeout 20 qmicli -d qrtr://0 --uim-get-card-status 2>&1); then
+		break
+	fi
+	attempt=$((attempt + 1))
+	test "$attempt" -lt 60 || fail 'cannot read SIM status'
+	sleep 1
+done
+if ! printf '%s\n' "$status" | grep -q "Primary GW:[[:space:]]*slot '1', application"; then
+	test "$action" = start || fail 'slot-1 primary GW session is inactive'
+	aid=$(printf '%s\n' "$status" | awk '/Application ID:/ { getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }')
+	printf '%s\n' "$aid" | grep -qE '^([0-9A-F]{2}:){15}[0-9A-F]{2}$' || fail 'slot-1 USIM AID is malformed'
+	timeout 20 qmicli -d qrtr://0 --uim-change-provisioning-session="slot=1,activate=yes,session-type=primary-gw-provisioning,aid=$aid" || fail 'cannot activate slot-1 primary GW session'
+fi
+
+attempt=0
+while :; do
+	status=$(timeout 15 qmicli -d qrtr://0 --uim-get-card-status 2>&1 || true)
+	if printf '%s\n' "$status" | grep -q "Primary GW:[[:space:]]*slot '1', application" && printf '%s\n' "$status" | grep -q "Application state: 'ready'"; then break; fi
+	attempt=$((attempt + 1)); test "$attempt" -lt 30 || fail 'slot-1 USIM did not become ready'; sleep 1
+done
+
+echo ipa=ready
+echo modem=online
+echo primary_gw=slot1-ready
+echo M1892_CELLULAR_PREPARE_OK

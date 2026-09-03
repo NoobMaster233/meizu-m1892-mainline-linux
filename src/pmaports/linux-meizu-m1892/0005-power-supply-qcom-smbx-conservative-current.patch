@@ -1,0 +1,29 @@
+diff --git a/drivers/power/supply/qcom_smbx.c b/drivers/power/supply/qcom_smbx.c
+--- a/drivers/power/supply/qcom_smbx.c
++++ b/drivers/power/supply/qcom_smbx.c
+@@ -352,7 +352,7 @@ static int smbx_ov_status(struct smb_chip *chip)
+ 	if (rc)
+ 		return rc;
+ 
+-	return !!(reg & mask);
++	return !!(val & mask);
+ }
+ 
+ static int smb_get_prop_status(struct smb_chip *chip, int *val)
+@@ -1088,8 +1088,15 @@ static int smb_probe(struct platform_device *pdev)
+ 	 * would expect this to be changed dynamically based on temperature
+ 	 * reporting.
+ 	 */
++	/*
++	 * Respect the battery's declared safe constant-charge ceiling.  The old
++	 * fixed 1.95 A value was too aggressive for boards that deliberately use
++	 * a conservative simple-battery profile during mainline bring-up.
++	 */
+ 	rc = regmap_write(chip->regmap, chip->base + FAST_CHARGE_CURRENT_CFG,
+-			  1950000 / CURRENT_SCALE_FACTOR);
++			  min_t(int,
++				chip->batt_info->constant_charge_current_max_ua,
++				1950000) / CURRENT_SCALE_FACTOR);
+ 	if (rc < 0)
+ 		return dev_err_probe(chip->dev, rc,
+ 				     "Couldn't write fast charge current cfg");

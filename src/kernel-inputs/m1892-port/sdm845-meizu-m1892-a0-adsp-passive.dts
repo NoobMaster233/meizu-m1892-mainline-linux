@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * A0.1 diagnostic variant for Meizu 16th Plus (M1892).
+ *
+ * This variant changes only the ADSP platform-node gate.  It must be paired
+ * with the audited qcom_q6v5_pas diagnostic module that sets the SDM845 ADSP
+ * resource auto_boot field to false.  Loading an unmodified PAS module with
+ * this DT will actively authenticate and start ADSP firmware.
+ *
+ * SLIMbus, the sound card, SPI0 and both CS35L41 amplifiers remain disabled
+ * by the included baseline DTS.
+ */
+
+#include "sdm845-meizu-m1892-r86-bluetooth-passive.dts"
+
+&adsp_pas {
+	firmware-name = "qcom/sdm845/m1892/adsp.mdt";
+	status = "okay";
+};

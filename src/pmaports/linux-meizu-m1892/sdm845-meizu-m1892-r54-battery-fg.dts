@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R54 PMI8998 fuel-gauge telemetry candidate.
+ *
+ * Keep the proven R53 touchscreen reset path and add only the battery model
+ * consumed by the PMI8998 fuel-gauge driver.  The SMB2 charger remains
+ * disabled and is deliberately not referenced from the fuel-gauge node:
+ * this candidate observes battery telemetry but does not enable charging.
+ *
+ * The fixed values come from the stock M1892 battery profile
+ * "fg-gen3-batterydata-m1892-3600mah" / "ATL-TERM".
+ */
+
+#include "sdm845-meizu-m1892-r53-touch-reset.dts"
+
+/ {
+	battery: battery {
+		compatible = "simple-battery";
+
+		charge-full-design-microamp-hours = <3600000>;
+		voltage-min-design-microvolt = <3300000>;
+		voltage-max-design-microvolt = <4400000>;
+	};
+};
+
+&pmi8998_fg {
+	monitored-battery = <&battery>;
+	status = "okay";
+};

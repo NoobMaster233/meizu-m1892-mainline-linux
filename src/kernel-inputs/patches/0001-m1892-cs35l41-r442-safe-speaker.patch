@@ -1,0 +1,297 @@
+diff --git a/sound/soc/codecs/cs35l41-lib.c b/sound/soc/codecs/cs35l41-lib.c
+index 1702f2604..78e54dab8 100644
+--- a/sound/soc/codecs/cs35l41-lib.c
++++ b/sound/soc/codecs/cs35l41-lib.c
+@@ -9,6 +9,7 @@
+ 
+ #include <linux/dev_printk.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/slab.h>
+@@ -764,6 +765,7 @@ struct regmap_config cs35l41_regmap_spi = {
+ 	.readable_reg = cs35l41_readable_reg,
+ 	.precious_reg = cs35l41_precious_reg,
+ 	.cache_type = REGCACHE_MAPLE,
++	.use_single_read = true,
+ };
+ EXPORT_SYMBOL_GPL(cs35l41_regmap_spi);
+ 
+@@ -904,17 +906,17 @@ int cs35l41_register_errata_patch(struct device *dev, struct regmap *reg, unsign
+ 
+ 	switch (reg_revid) {
+ 	case CS35L41_REVID_A0:
+-		ret = regmap_register_patch(reg, cs35l41_reva0_errata_patch,
++		ret = regmap_multi_reg_write(reg, cs35l41_reva0_errata_patch,
+ 					    ARRAY_SIZE(cs35l41_reva0_errata_patch));
+ 		rev = "A0";
+ 		break;
+ 	case CS35L41_REVID_B0:
+-		ret = regmap_register_patch(reg, cs35l41_revb0_errata_patch,
++		ret = regmap_multi_reg_write(reg, cs35l41_revb0_errata_patch,
+ 					    ARRAY_SIZE(cs35l41_revb0_errata_patch));
+ 		rev = "B0";
+ 		break;
+ 	case CS35L41_REVID_B2:
+-		ret = regmap_register_patch(reg, cs35l41_revb2_errata_patch,
++		ret = regmap_multi_reg_write(reg, cs35l41_revb2_errata_patch,
+ 					    ARRAY_SIZE(cs35l41_revb2_errata_patch));
+ 		rev = "B2";
+ 		break;
+@@ -1286,6 +1288,41 @@ int cs35l41_global_enable(struct device *dev, struct regmap *regmap, enum cs35l4
+ 		ret = regmap_read_poll_timeout(regmap, CS35L41_IRQ1_STATUS1,
+ 					int_status, int_status & pup_pdn_mask,
+ 					1000, 100000);
++		if (ret == -ETIMEDOUT && !enable &&
++		    of_machine_is_compatible("meizu,m1892")) {
++			unsigned int pwr_ctrl2 = ~0U, status1 = ~0U;
++			unsigned int critical = CS35L41_AMP_SHORT_ERR |
++				CS35L41_BST_SHORT_ERR | CS35L41_BST_OVP_ERR |
++				CS35L41_BST_DCM_UVP_ERR | CS35L41_TEMP_WARN |
++				CS35L41_TEMP_ERR;
++			int read_pwr1, read_pwr2, read_status1;
++
++			/* Stock M1892 clears GLOBAL_EN and does not wait for
++			 * PDN_DONE.  Mainline's stricter poll can time out when a
++			 * userspace probe prepares and closes without START, hence
++			 * without real I2S clocks.  Accept that one case only after
++			 * proving both hardware enables are off and no protection
++			 * fault is latched.
++			 */
++			read_pwr1 = regmap_read(regmap, CS35L41_PWR_CTRL1, &pwr_ctrl1);
++			read_pwr2 = regmap_read(regmap, CS35L41_PWR_CTRL2, &pwr_ctrl2);
++			read_status1 = regmap_read(regmap, CS35L41_IRQ1_STATUS1,
++						   &status1);
++			if (!read_pwr1 && !read_pwr2 && !read_status1 &&
++			    !(pwr_ctrl1 & CS35L41_GLOBAL_EN_MASK) &&
++			    !(pwr_ctrl2 & CS35L41_AMP_EN_MASK) &&
++			    !(status1 & critical)) {
++				dev_warn(dev,
++					 "M1892 R442: accepted missing PDN_DONE with GLOBAL_EN=0 AMP_EN=0 status=0x%08x\n",
++					 status1);
++				ret = 0;
++			} else {
++				dev_warn(dev,
++					 "M1892 R442: rejected PDN fallback reads=%d/%d/%d pwr1=0x%08x pwr2=0x%08x status=0x%08x critical=0x%08x\n",
++					 read_pwr1, read_pwr2, read_status1, pwr_ctrl1,
++					 pwr_ctrl2, status1, status1 & critical);
++			}
++		}
+ 		if (ret)
+ 			dev_err(dev, "Enable(%d) failed: %d\n", enable, ret);
+ 
+diff --git a/sound/soc/codecs/cs35l41.c b/sound/soc/codecs/cs35l41.c
+index b2a076706..2582d23c0 100644
+--- a/sound/soc/codecs/cs35l41.c
++++ b/sound/soc/codecs/cs35l41.c
+@@ -514,24 +514,34 @@ static int cs35l41_main_amp_event(struct snd_soc_dapm_widget *w,
+ 
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
++		dev_emerg(cs35l41->dev,
++			  "M1892 R442: safe Main AMP power-up begin\n");
+ 		regmap_multi_reg_write_bypassed(cs35l41->regmap,
+ 						cs35l41_pup_patch,
+ 						ARRAY_SIZE(cs35l41_pup_patch));
+-
+-		ret = cs35l41_global_enable(cs35l41->dev, cs35l41->regmap, cs35l41->hw_cfg.bst_type,
+-					    1, &cs35l41->dsp.cs_dsp);
++		ret = cs35l41_global_enable(cs35l41->dev, cs35l41->regmap,
++					    cs35l41->hw_cfg.bst_type, 1,
++					    &cs35l41->dsp.cs_dsp);
++		if (!ret)
++			dev_emerg(cs35l41->dev,
++				  "M1892 R442: safe Main AMP power-up passed\n");
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMD:
+-		ret = cs35l41_global_enable(cs35l41->dev, cs35l41->regmap, cs35l41->hw_cfg.bst_type,
+-					    0, &cs35l41->dsp.cs_dsp);
+-
++		dev_emerg(cs35l41->dev,
++			  "M1892 R442: safe Main AMP power-down begin\n");
++		ret = cs35l41_global_enable(cs35l41->dev, cs35l41->regmap,
++					    cs35l41->hw_cfg.bst_type, 0,
++					    &cs35l41->dsp.cs_dsp);
+ 		regmap_multi_reg_write_bypassed(cs35l41->regmap,
+ 						cs35l41_pdn_patch,
+ 						ARRAY_SIZE(cs35l41_pdn_patch));
++		if (!ret)
++			dev_emerg(cs35l41->dev,
++				  "M1892 R442: safe Main AMP power-down passed\n");
+ 		break;
+ 	default:
+ 		dev_err(cs35l41->dev, "Invalid event = 0x%x\n", event);
+-		ret = -EINVAL;
++		return -EINVAL;
+ 	}
+ 
+ 	return ret;
+@@ -772,6 +782,10 @@ static int cs35l41_pcm_hw_params(struct snd_pcm_substream *substream,
+ 	}
+ 
+ 	asp_wl = params_width(params);
++	dev_emerg(cs35l41->dev,
++		  "M1892 R442: hw_params stream=%s rate=%u width=%u channels=%u\n",
++		  substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? "playback" : "capture",
++		  rate, asp_wl, params_channels(params));
+ 
+ 	regmap_update_bits(cs35l41->regmap, CS35L41_GLOBAL_CLK_CTRL,
+ 			   CS35L41_GLOBAL_FS_MASK,
+@@ -943,7 +957,13 @@ static int cs35l41_component_probe(struct snd_soc_component *component)
+ 			return ret;
+ 	}
+ 
+-	return wm_adsp2_component_probe(&cs35l41->dsp, component);
++	ret = wm_adsp2_component_probe(&cs35l41->dsp, component);
++	if (ret)
++		return ret;
++
++	dev_emerg(cs35l41->dev,
++		  "M1892 R442: codec SPK route available for safe low-tone test\n");
++	return 0;
+ }
+ 
+ static void cs35l41_component_remove(struct snd_soc_component *component)
+@@ -1205,6 +1225,9 @@ int cs35l41_probe(struct cs35l41_private *cs35l41, const struct cs35l41_hw_cfg *
+ 	int irq_pol = 0;
+ 	int ret;
+ 
++	dev_emerg(cs35l41->dev, "M1892 R442: full upstream probe begin irq=%d\n",
++		  cs35l41->irq);
++
+ 	if (hw_cfg) {
+ 		cs35l41->hw_cfg = *hw_cfg;
+ 	} else {
+@@ -1290,18 +1313,23 @@ int cs35l41_probe(struct cs35l41_private *cs35l41, const struct cs35l41_hw_cfg *
+ 		ret = -ENODEV;
+ 		goto err;
+ 	}
++	dev_emerg(cs35l41->dev,
++		  "M1892 R442: identity passed id=0x%08x rev=0x%02x\n",
++		  regid, reg_revid);
+ 
+ 	cs35l41_test_key_unlock(cs35l41->dev, cs35l41->regmap);
+ 
+ 	ret = cs35l41_register_errata_patch(cs35l41->dev, cs35l41->regmap, reg_revid);
+ 	if (ret)
+ 		goto err;
++	dev_emerg(cs35l41->dev, "M1892 R442: synchronous errata passed\n");
+ 
+ 	ret = cs35l41_otp_unpack(cs35l41->dev, cs35l41->regmap);
+ 	if (ret < 0) {
+ 		dev_err_probe(cs35l41->dev, ret, "OTP Unpack failed\n");
+ 		goto err;
+ 	}
++	dev_emerg(cs35l41->dev, "M1892 R442: upstream OTP unpack passed\n");
+ 
+ 	cs35l41_test_key_lock(cs35l41->dev, cs35l41->regmap);
+ 
+@@ -1322,6 +1350,8 @@ int cs35l41_probe(struct cs35l41_private *cs35l41, const struct cs35l41_hw_cfg *
+ 		dev_err_probe(cs35l41->dev, ret, "Failed to request IRQ\n");
+ 		goto err;
+ 	}
++	dev_emerg(cs35l41->dev, "M1892 R442: IRQ request passed enabled irq=%d\n",
++		  cs35l41->irq);
+ 
+ 	ret = cs35l41_set_pdata(cs35l41);
+ 	if (ret < 0) {
+@@ -1336,6 +1366,7 @@ int cs35l41_probe(struct cs35l41_private *cs35l41, const struct cs35l41_hw_cfg *
+ 	ret = cs35l41_dsp_init(cs35l41);
+ 	if (ret < 0)
+ 		goto err;
++	dev_emerg(cs35l41->dev, "M1892 R442: DSP software init passed\n");
+ 
+ 	pm_runtime_set_autosuspend_delay(cs35l41->dev, 3000);
+ 	pm_runtime_use_autosuspend(cs35l41->dev);
+@@ -1350,6 +1381,7 @@ int cs35l41_probe(struct cs35l41_private *cs35l41, const struct cs35l41_hw_cfg *
+ 		dev_err_probe(cs35l41->dev, ret, "Register codec failed\n");
+ 		goto err_pm;
+ 	}
++	dev_emerg(cs35l41->dev, "M1892 R442: codec component registered\n");
+ 
+ 	pm_runtime_put_autosuspend(cs35l41->dev);
+ 
+@@ -1365,6 +1397,7 @@ int cs35l41_probe(struct cs35l41_private *cs35l41, const struct cs35l41_hw_cfg *
+ 
+ 	wm_adsp2_remove(&cs35l41->dsp);
+ err:
++	dev_emerg(cs35l41->dev, "M1892 R442: probe fail-closed ret=%d\n", ret);
+ 	cs35l41_safe_reset(cs35l41->regmap, cs35l41->hw_cfg.bst_type);
+ 	regulator_bulk_disable(CS35L41_NUM_SUPPLIES, cs35l41->supplies);
+ 	gpiod_set_value_cansleep(cs35l41->reset_gpio, 0);
+diff --git a/sound/soc/qcom/sdm845.c b/sound/soc/qcom/sdm845.c
+index cd8b2d43a..546214c8b 100644
+--- a/sound/soc/qcom/sdm845.c
++++ b/sound/soc/qcom/sdm845.c
+@@ -16,6 +16,7 @@
+ #include "common.h"
+ #include "qdsp6/q6afe.h"
+ #include "sdw.h"
++#include "../codecs/cs35l41.h"
+ #include "../codecs/rt5663.h"
+ 
+ #define DRIVER_NAME	"sdm845"
+@@ -366,11 +367,59 @@ static int sdm845_snd_startup(struct snd_pcm_substream *substream)
+ 		break;
+ 	case QUATERNARY_MI2S_RX:
+ 		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
+-		snd_soc_dai_set_sysclk(cpu_dai,
++		ret = snd_soc_dai_set_sysclk(cpu_dai,
+ 			Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT,
+ 			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+-		snd_soc_dai_set_fmt(cpu_dai, fmt);
+-		snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
++		if (ret < 0)
++			return dev_err_probe(rtd->dev, ret,
++					     "R437 QUAT CPU sysclk failed\n");
++		ret = snd_soc_dai_set_fmt(cpu_dai, fmt);
++		if (ret < 0)
++			return dev_err_probe(rtd->dev, ret,
++					     "R437 QUAT CPU format failed\n");
++
++		for_each_rtd_codec_dais(rtd, j, codec_dai) {
++			unsigned int rx_slot;
++			const char *prefix = codec_dai->component->name_prefix;
++
++			if (!prefix)
++				return dev_err_probe(rtd->dev, -EINVAL,
++						     "R437 codec prefix missing\n");
++			if (!strcmp(prefix, "Right"))
++				rx_slot = 0; /* CS1: stock ASPRX1 */
++			else if (!strcmp(prefix, "Left"))
++				rx_slot = 1; /* CS0: stock ASPRX2 */
++			else
++				return dev_err_probe(rtd->dev, -EINVAL,
++						     "R437 unexpected codec prefix %s\n",
++						     prefix);
++
++			ret = snd_soc_dai_set_fmt(codec_dai, codec_dai_fmt);
++			if (ret < 0)
++				return dev_err_probe(codec_dai->dev, ret,
++						     "R437 %s format failed\n", prefix);
++			ret = snd_soc_component_set_sysclk(codec_dai->component,
++					CS35L41_CLKID_SCLK, 0, MI2S_BCLK_RATE,
++					SND_SOC_CLOCK_IN);
++			if (ret < 0)
++				return dev_err_probe(codec_dai->dev, ret,
++						     "R437 %s component sysclk failed\n",
++						     prefix);
++			ret = snd_soc_dai_set_sysclk(codec_dai, CS35L41_CLKID_SCLK,
++						     MI2S_BCLK_RATE, SND_SOC_CLOCK_IN);
++			if (ret < 0)
++				return dev_err_probe(codec_dai->dev, ret,
++						     "R437 %s DAI sysclk failed\n", prefix);
++			ret = snd_soc_dai_set_channel_map(codec_dai, 0, NULL,
++						      1, &rx_slot);
++			if (ret < 0)
++				return dev_err_probe(codec_dai->dev, ret,
++						     "R437 %s channel map failed\n", prefix);
++
++			dev_emerg(rtd->dev,
++				  "M1892 R437: %s codec configured bclk=%u rx_slot=%u\n",
++				  prefix, MI2S_BCLK_RATE, rx_slot);
++		}
+ 		break;
+ 
+ 	case QUATERNARY_TDM_RX_0:

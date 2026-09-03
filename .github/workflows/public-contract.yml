@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+name: Public source contract
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate public tree and scripts
+        run: |
+          ./scripts/verify-public-tree.sh .
+          sha256sum -c SOURCE-MANIFEST.sha256
+          for script in scripts/*.sh; do sh -n "$script"; done
+          python3 -c 'import ast, glob, pathlib; [ast.parse(pathlib.Path(p).read_text()) for p in glob.glob("scripts/*.py")]'
+      - name: Prove deterministic source archive
+        run: |
+          ./scripts/make-public-source-archive.sh . "$RUNNER_TEMP/source-a.tar.gz"
+          ./scripts/make-public-source-archive.sh . "$RUNNER_TEMP/source-b.tar.gz"
+          cmp "$RUNNER_TEMP/source-a.tar.gz" "$RUNNER_TEMP/source-b.tar.gz"

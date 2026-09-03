@@ -1,0 +1,11 @@
+diff --git a/src/boot/boot.c b/src/boot/boot.c
+index 63f41e8..929bdf5 100644
+--- a/src/boot/boot.c
++++ b/src/boot/boot.c
+@@ -220,0 +221,6 @@ int boot(boot_config*boot){
++	if(r!=0&&confd_get_boolean("boot.direct_failure_hold",false)){
++		logger_set_console(true);
++		tlog_error("M1892 DIRECT BOOT FAILED: holding the complete error screen");
++		tlog_error("The firmware will not return to ABL/fastboot automatically");
++		while(true)gBS->Stall(1000*1000);
++	}

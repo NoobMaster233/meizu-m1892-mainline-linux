@@ -1,0 +1,44 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * R404: bounded, manually controlled PMI8998 OTG VBUS for the R403 fixed
+ * USB-host path.  The regulator boots off and is limited to 500 mA.  Its
+ * driver refuses to enable when the PMIC reports an external USB input and
+ * forces VBUS off on either OTG fault IRQ.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/spmi@c440000/pmic@2";
+
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			m1892_otg_vbus: usb-vbus-regulator@1100 {
+				compatible = "qcom,pmi8998-vbus-reg";
+				reg = <0x1100>;
+				interrupts = <0x2 0x11 0x0 0x3>,
+					     <0x2 0x11 0x1 0x3>;
+				interrupt-names = "otg-fail", "otg-overcurrent";
+				regulator-name = "m1892-pmi8998-otg-vbus";
+				regulator-min-microamp = <250000>;
+				regulator-max-microamp = <500000>;
+				status = "okay";
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/";
+
+		__overlay__ {
+			m1892_otg_vbus_output: otg-vbus-output {
+				compatible = "regulator-output";
+				vout-supply = <&m1892_otg_vbus>;
+				status = "okay";
+			};
+		};
+	};
+};

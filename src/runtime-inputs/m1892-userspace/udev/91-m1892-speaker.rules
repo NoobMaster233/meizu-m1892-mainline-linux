@@ -1,0 +1,4 @@
+# PulseAudio 17 constructs an invalid default UCM sink name for this one-output
+# platform card. Ignore only the M1892 SDM845 card in module-udev-detect; the
+# explicit module-alsa-card stanza supplies the stable m1892_speaker name.
+ACTION=="add|change", SUBSYSTEM=="sound", KERNEL=="card*", DRIVERS=="msm-snd-sdm845", ENV{PULSE_IGNORE}="1"

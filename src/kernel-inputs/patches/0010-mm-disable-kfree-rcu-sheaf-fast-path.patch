@@ -1,0 +1,28 @@
+From: M1892 mainline bring-up <m1892@localhost>
+Subject: [PATCH] mm: bypass kfree_rcu sheaf fast path on M1892
+
+The 7.1-rc1 M1892 kernel produced a delayed fatal Oops in
+__rcu_free_sheaf_prepare().  The failing sheaf contained the address of
+rcu_free_sheaf itself as an object, consistent with stale or multiply queued
+sheaf state.  Keep CONFIG_KVFREE_RCU_BATCHED and its established page/list
+batching, but bypass the newer SLUB sheaf shortcut until the upstream sheaf
+lifecycle is resolved or the product kernel is rebased.
+
+This trades a small amount of kfree_rcu throughput for stability.  It does
+not make kvfree_rcu synchronous and does not change ordinary SLUB allocation.
+
+--- a/mm/slab_common.c
++++ b/mm/slab_common.c
+@@ -1596,6 +1596,12 @@ static bool kfree_rcu_sheaf(void *obj)
+ {
+ 	struct kmem_cache *s;
+ 	struct slab *slab;
++
++	/*
++	 * M1892 7.1-rc1: delayed invalid object in rcu_free_sheaf().
++	 * Retain the older kfree_rcu bulk/list batching below this shortcut.
++	 */
++	return false;
+ 
+ 	if (is_vmalloc_addr(obj))
+ 		return false;

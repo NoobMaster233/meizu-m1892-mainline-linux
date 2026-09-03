@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R58 controlled Adreno 630 probe candidate.
+ *
+ * Keep the accepted R57 recovery baseline.  Enable the upstream SDM845 A630
+ * node and point its ZAP shader at the generic signed SDM845 image shipped by
+ * linux-firmware.  This candidate only probes and idles the GPU; it must not
+ * run a renderer, benchmark or forced-frequency workload.
+ */
+
+#include "sdm845-meizu-m1892-r57-rtc-readonly.dts"
+
+&gpu {
+	status = "okay";
+};
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sdm845/a630_zap.mbn";
+};
+

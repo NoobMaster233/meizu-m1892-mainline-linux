@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R48 touch-bus DMA-provider isolation stage.
+ *
+ * R47 proved that the QUPv3 ID0 wrapper can bind, while the SE5 I2C
+ * controller repeatedly deferred because its GPI DMA provider was disabled
+ * and CONFIG_QCOM_GPI_DMA was modular.  R48 enables that provider together
+ * with the already isolated wrapper and I2C controller.
+ *
+ * Deliberately absent at this stage:
+ *   - an I2C child at address 0x20;
+ *   - touch-panel regulators;
+ *   - touch reset or interrupt GPIO operations.
+ */
+
+#include "sdm845-meizu-m1892-sofef00m.dts"
+
+&gpi_dma0 {
+	status = "okay";
+};
+
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&i2c5 {
+	clock-frequency = <100000>;
+	status = "okay";
+};

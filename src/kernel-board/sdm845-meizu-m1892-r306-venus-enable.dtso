@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+/dts-v1/;
+/plugin/;
+
+/* Enable only the upstream SDM845 Venus v2 node on the accepted R271 DTB. */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/video-codec@aa00000";
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+};

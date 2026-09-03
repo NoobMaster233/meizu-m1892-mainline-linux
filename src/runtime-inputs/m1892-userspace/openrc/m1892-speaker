@@ -1,0 +1,121 @@
+#!/sbin/openrc-run
+
+description="M1892 serialized CS35L41 mainline speaker bring-up"
+
+depend() {
+	need localmount udev
+	after modules udev-settle
+	before greetd
+}
+
+speaker_root=/usr/lib/m1892/speaker
+state_root=/run/m1892-speaker
+persist_log=/var/log/m1892-speaker.log
+sound_driver=/sys/bus/platform/drivers/msm-snd-sdm845
+
+speaker_mark() {
+	line="$(date -u +%Y-%m-%dT%H:%M:%SZ) $*"
+	printf '%s\n' "$line" >>"$persist_log"
+	printf '<0>M1892_SPEAKER %s\n' "$*" >/dev/kmsg
+}
+
+speaker_load() {
+	name=$1
+	file=$2
+	grep -q "^$name " /proc/modules || insmod "$speaker_root/$file"
+}
+
+speaker_require_route() {
+	routes=$1
+	sink=$2
+	source=$3
+	case " $routes " in
+		*" $sink $source "*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+start() {
+	ebegin "Starting serialized M1892 speakers"
+	install -d -m 0755 "$state_root"
+	rm -f "$state_root/PASS"
+	: >"$persist_log"
+
+	test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = \
+		"Meizu 16th Plus (M1892)" || { eend 1 "wrong model"; return 1; }
+	test "$(uname -r)" = 7.1.0-rc1-sdm845 || { eend 1 "wrong kernel"; return 1; }
+	routes=$(tr '\000' ' ' </sys/firmware/devicetree/base/sound/audio-routing)
+	for route in \
+		'Left Spk|Left SPK' 'Right Spk|Right SPK' 'RX_BIAS|MCLK' \
+		'MIC BIAS1|MCLK' 'MIC BIAS2|MCLK' 'MIC BIAS3|MCLK' \
+		'AMIC1|MIC BIAS1' 'AMIC2|MIC BIAS2' 'AMIC3|MIC BIAS3'; do
+		sink=${route%%|*}
+		source=${route#*|}
+		speaker_require_route "$routes" "$sink" "$source" || {
+			eend 1 "required route absent: $sink <- $source"
+			return 1
+		}
+	done
+	test "$(od -An -tx1 -N4 /sys/firmware/devicetree/base/remoteproc-adsp/glink-edge/apr/service@4/dais/dai@22/qcom,sd-lines | tr -d ' \n')" = 00000002 || { eend 1 "SD2 absent"; return 1; }
+
+	for dev in spi0.0 spi0.1; do
+		test -e "/sys/bus/spi/devices/$dev/driver_override" || { eend 1 "$dev absent"; return 1; }
+		test ! -L "/sys/bus/spi/devices/$dev/driver" || { eend 1 "$dev bound too early"; return 1; }
+		printf 'm1892-block\n' >"/sys/bus/spi/devices/$dev/driver_override"
+	done
+	speaker_mark "STAGE0_STATIC_DT_BLOCKED_PASS boot_id=$(cat /proc/sys/kernel/random/boot_id)"
+
+	if test -L "$sound_driver/sound"; then echo sound >"$sound_driver/unbind"; fi
+	rmmod snd_soc_sdm845 2>/dev/null || true
+	speaker_load cs_dsp cs_dsp.ko
+	speaker_load snd_soc_wm_adsp snd-soc-wm-adsp.ko
+	speaker_load snd_soc_cs35l41_lib snd-soc-cs35l41-lib.ko
+	speaker_load snd_soc_cs35l41 snd-soc-cs35l41.ko
+	speaker_load snd_soc_cs35l41_spi snd-soc-cs35l41-spi.ko
+	test ! -L /sys/bus/spi/devices/spi0.0/driver || { eend 1 "CS0 override failed"; return 1; }
+	test ! -L /sys/bus/spi/devices/spi0.1/driver || { eend 1 "CS1 override failed"; return 1; }
+	speaker_mark STAGE1_DRIVER_BLOCKED_PASS
+
+	printf 'cs35l41\n' >/sys/bus/spi/devices/spi0.1/driver_override
+	speaker_mark STAGE2_CS1_BIND_BEGIN
+	echo spi0.1 >/sys/bus/spi/drivers/cs35l41/bind || { eend 1 "CS1 bind"; return 1; }
+	test "$(basename "$(readlink -f /sys/bus/spi/devices/spi0.1/driver)")" = cs35l41 || { eend 1 "CS1 absent"; return 1; }
+	speaker_mark STAGE2_CS1_BIND_RETURNED
+
+	printf 'cs35l41\n' >/sys/bus/spi/devices/spi0.0/driver_override
+	speaker_mark STAGE3_CS0_BIND_BEGIN
+	echo spi0.0 >/sys/bus/spi/drivers/cs35l41/bind || { eend 1 "CS0 bind"; return 1; }
+	test "$(basename "$(readlink -f /sys/bus/spi/devices/spi0.0/driver)")" = cs35l41 || { eend 1 "CS0 absent"; return 1; }
+	speaker_mark STAGE3_CS0_BIND_RETURNED
+	printf '\n' >/sys/bus/spi/devices/spi0.1/driver_override
+	printf '\n' >/sys/bus/spi/devices/spi0.0/driver_override
+
+	dmesg | awk '/M1892_SPEAKER STAGE0_STATIC_DT_BLOCKED_PASS/{buf=""} {buf=buf $0 ORS} END{printf "%s",buf}' >"$state_root/dmesg-bind.txt"
+	awk '
+	/full upstream probe begin/ { if (active) overlap=1; active=1; began++ }
+	/codec component registered/ { if (!active) bad=1; active=0; completed++ }
+	END { exit !(began == 2 && completed == 2 && !active && !overlap && !bad) }
+	' "$state_root/dmesg-bind.txt" || { eend 1 "codec probe was not serialized"; return 1; }
+	speaker_mark STAGE4_DUAL_CODEC_SERIAL_PASS
+
+	speaker_load snd_soc_sdm845 snd-soc-sdm845.ko
+	i=0
+	while test "$i" -lt 12; do
+		test -L "$sound_driver/sound" && grep -q 'Meizu 16th Plus' /proc/asound/cards 2>/dev/null && break
+		i=$((i + 1)); sleep 1
+	done
+	test -L "$sound_driver/sound" || { eend 1 "sound card not bound"; return 1; }
+	grep -q 'Meizu 16th Plus' /proc/asound/cards || { eend 1 "sound card absent"; return 1; }
+	grep -q '^Left Spk: Off' '/sys/kernel/debug/asoc/Meizu 16th Plus/dapm/Left Spk' || { eend 1 "left route"; return 1; }
+	grep -q '^Right Spk: Off' '/sys/kernel/debug/asoc/Meizu 16th Plus/dapm/Right Spk' || { eend 1 "right route"; return 1; }
+	touch "$state_root/PASS"
+	speaker_mark M1892_PERSISTENT_SPEAKER_BIND_PASS
+	eend 0
+}
+
+stop() {
+	# Leave teardown to the kernel shutdown path. Unloading a live ASoC graph
+	# while desktop clients are closing is less safe than keeping it registered.
+	ebegin "Leaving M1892 speaker graph registered for kernel shutdown"
+	eend 0
+}

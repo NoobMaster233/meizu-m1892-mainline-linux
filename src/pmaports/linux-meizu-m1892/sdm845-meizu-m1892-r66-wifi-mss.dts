@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R66 passive WCN3990 + modem remoteproc candidate.
+ *
+ * Extend the live-proven R61 board description with the two omissions found
+ * by comparison against the existing M1892 Linux 6.1 port:
+ *
+ *   - PM8998 L23 supplies the second 3.3 V WCN3990 channel;
+ *   - the SDM845 modem subsystem supplies the WLFW QRTR/QMI service.
+ *
+ * The initramfs extracts only mba.mbn/modem.mdt/modem.bXX from the raw modem
+ * FAT16 partition into tmpfs before inserting the modular MSS driver.  No UFS
+ * filesystem is mounted or written.
+ */
+
+#include "sdm845-meizu-m1892-r61-wifi-flyme-hostcap.dts"
+
+&apps_rsc {
+	regulators-0 {
+		vreg_l23a_3p3: ldo23 {
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3312000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+&mss_pil {
+	firmware-name = "qcom/sdm845/m1892/mba.mbn",
+			"qcom/sdm845/m1892/modem.mbn";
+	status = "okay";
+};
+
+&wifi {
+	vdd-3.3-ch1-supply = <&vreg_l23a_3p3>;
+};

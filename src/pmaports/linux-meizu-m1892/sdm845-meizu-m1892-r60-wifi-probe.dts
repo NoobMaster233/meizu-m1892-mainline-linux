@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R60 controlled WCN3990 probe candidate.
+ *
+ * Keep the live-validated R59 display, touch, CPUFreq, RTC and GPU baseline.
+ * Add only the four PM8998 rails used by the downstream M1892 ICNSS node,
+ * then enable the upstream SDM845 WCN3990 SNOC node.  The ath10k stack stays
+ * modular and is inserted late by the userspace helper, after USB and the
+ * existing automatic bring-up chain are stable.
+ */
+
+#include "sdm845-meizu-m1892-r59-oem-zap.dts"
+
+&apps_rsc {
+	regulators-0 {
+		/*
+		 * Parent groupings and voltage ranges match both the stock M1892
+		 * ICNSS supplies and upstream sdm845-mtp.dts.
+		 */
+		vdd-l2-l8-l17-supply = <&vreg_s3a_1p35>;
+		vdd-l4-l5-supply = <&vreg_s7a_1p025>;
+		vdd-l10-l23-l25-supply = <&vreg_bob>;
+
+		vreg_l5a_0p8: ldo5 {
+			regulator-min-microvolt = <800000>;
+			regulator-max-microvolt = <800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l7a_1p8: ldo7 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l17a_1p3: ldo17 {
+			regulator-min-microvolt = <1304000>;
+			regulator-max-microvolt = <1304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l25a_3p3: ldo25 {
+			regulator-min-microvolt = <3104000>;
+			regulator-max-microvolt = <3312000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+&wifi {
+	vdd-0.8-cx-mx-supply = <&vreg_l5a_0p8>;
+	vdd-1.8-xo-supply = <&vreg_l7a_1p8>;
+	vdd-1.3-rfa-supply = <&vreg_l17a_1p3>;
+	vdd-3.3-ch0-supply = <&vreg_l25a_3p3>;
+
+	/*
+	 * The 8-bit host-capability quirk is used by upstream SDM845 MTP,
+	 * DB845c, OnePlus and Google designs.  The calibration variant points
+	 * only at the board-2.bin assembled from this phone's official Flyme
+	 * NON-HLOS payload.
+	 */
+	qcom,snoc-host-cap-8bit-quirk;
+	qcom,calibration-variant = "Meizu_m1892";
+
+	status = "okay";
+};

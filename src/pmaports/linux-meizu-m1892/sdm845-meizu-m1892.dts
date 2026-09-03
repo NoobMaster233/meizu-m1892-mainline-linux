@@ -1,0 +1,328 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Minimal mainline bring-up device tree for Meizu 16th Plus (M1892).
+ *
+ * This is deliberately a storage/console bring-up DTS, not a complete port.
+ * Do not enable unverified peripherals until their schematics/downstream data
+ * and mainline bindings have been reconciled.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+
+#include "sdm845.dtsi"
+#include "pm8998.dtsi"
+#include "pmi8998.dtsi"
+
+/ {
+	model = "Meizu 16th Plus (M1892)";
+	compatible = "meizu,m1892", "qcom,sdm845";
+	chassis-type = "handset";
+
+	/*
+	 * Values copied from the stock merged DT.  They are retained for
+	 * bootloader DT matching; do not replace them with another phone's IDs.
+	 */
+	qcom,msm-id = <0x141 0x20001>;
+	qcom,board-id = <0 0>;
+
+	aliases {
+		serial0 = &uart9;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		label = "M1892 keys";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&volume_up_gpio>;
+
+		key-volume-up {
+			label = "Volume up";
+			linux,code = <KEY_VOLUMEUP>;
+			gpios = <&pm8998_gpios 6 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+			wakeup-source;
+		};
+	};
+
+	/*
+	 * Exact stock address and size.  This range is also outside the static
+	 * reserved regions in the mainline SDM845 SoC DTS.
+	 */
+	reserved-memory {
+		ramoops: ramoops@9ff00000 {
+			compatible = "ramoops";
+			reg = <0 0x9ff00000 0 0x200000>;
+			record-size = <0x4000>;
+			console-size = <0x40000>;
+		};
+	};
+
+	vph_pwr: vph-pwr-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3700000>;
+		regulator-max-microvolt = <3700000>;
+	};
+};
+
+/*
+ * Only regulators required by UFS and the USB2 HS PHY are declared here.
+ * The voltages and parent groupings match upstream SDM845 handset DTS files.
+ */
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm8998-rpmh-regulators";
+		qcom,pmic-id = "a";
+
+		vdd-s3-supply = <&vph_pwr>;
+		vdd-s5-supply = <&vph_pwr>;
+		vdd-s7-supply = <&vph_pwr>;
+		vdd-l1-l27-supply = <&vreg_s7a_1p025>;
+		vdd-l7-l12-l14-l15-supply = <&vreg_s5a_2p04>;
+		vdd-l20-l24-supply = <&vreg_bob>;
+		vdd-l26-supply = <&vreg_s3a_1p35>;
+
+		vreg_s3a_1p35: smps3 {
+			regulator-min-microvolt = <1352000>;
+			regulator-max-microvolt = <1352000>;
+		};
+
+		vreg_s5a_2p04: smps5 {
+			regulator-min-microvolt = <1904000>;
+			regulator-max-microvolt = <2040000>;
+		};
+
+		vreg_s7a_1p025: smps7 {
+			regulator-min-microvolt = <900000>;
+			regulator-max-microvolt = <1028000>;
+		};
+
+		vdda_ufs1_core:
+		vdda_usb1_ss_core:
+		vreg_l1a_0p875: ldo1 {
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <880000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vdda_qusb_hs0_1p8:
+		vreg_l12a_1p8: ldo12 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l20a_2p95: ldo20 {
+			regulator-min-microvolt = <2704000>;
+			regulator-max-microvolt = <2960000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vdda_qusb_hs0_3p1:
+		vreg_l24a_3p075: ldo24 {
+			regulator-min-microvolt = <3088000>;
+			regulator-max-microvolt = <3088000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vdda_ufs1_1p2:
+		vreg_l26a_1p2: ldo26 {
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+
+	regulators-1 {
+		compatible = "qcom,pmi8998-rpmh-regulators";
+		qcom,pmic-id = "b";
+
+		vdd-bob-supply = <&vph_pwr>;
+
+		vreg_bob: bob {
+			regulator-min-microvolt = <3312000>;
+			regulator-max-microvolt = <3600000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_AUTO>;
+			regulator-allow-bypass;
+		};
+	};
+};
+
+/*
+ * The downstream M1892 GCC driver votes the CPUSS AHB/RBCPR RCGs through
+ * vdd_cx_ao.  Mainline currently models only the regular CX domain on GCC,
+ * and reading the first CPUSS RCG at 0x48018 can raise an asynchronous SError
+ * on this boot chain.  Nothing in this bring-up DTS consumes these CPUSS
+ * clocks, so leave them to the firmware until CX_AO is modelled explicitly.
+ */
+&gcc {
+	protected-clocks = <GCC_QSPI_CORE_CLK>,
+			   <GCC_QSPI_CORE_CLK_SRC>,
+			   <GCC_QSPI_CNOC_PERIPH_AHB_CLK>,
+			   <GCC_LPASS_Q6_AXI_CLK>,
+			   <GCC_LPASS_SWAY_CLK>,
+			   <GCC_CPUSS_AHB_CLK>,
+			   <GCC_CPUSS_AHB_CLK_SRC>,
+			   <GCC_CPUSS_RBCPR_CLK>,
+			   <GCC_CPUSS_RBCPR_CLK_SRC>,
+			   <GCC_SYS_NOC_CPUSS_AHB_CLK>,
+			   <GCC_CPUSS_DVM_BUS_CLK>,
+			   <GCC_CPUSS_GNOC_CLK>;
+};
+
+/*
+ * Preserve the inaccessible/reserved TLMM lines from the original M1892
+ * Linux 6.1 port.  During gpiochip registration gpiolib asks the controller
+ * for the direction of every valid line; reading GPIO 82 on this boot chain
+ * raises an asynchronous SError.  Both ranges below come directly from
+ * commit 75b5cba91c7a ("arm64: dts: qcom: add meizu 16th support").
+ */
+&tlmm {
+	gpio-reserved-ranges = <80 5>, <87 20>;
+};
+
+/* Stock serial0 is QUPv3 SE9 at 0x00a84000. */
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&uart9 {
+	label = "M1892 debug UART";
+	status = "okay";
+};
+
+&pm8998_gpios {
+	volume_up_gpio: volume-up-state {
+		pins = "gpio6";
+		function = "normal";
+		input-enable;
+		bias-pull-up;
+		qcom,drive-strength = <0>;
+	};
+};
+
+/*
+ * UFS is the only mass-storage controller enabled in this first revision.
+ * Reset GPIO and supplies match stock/upstream SDM845 handset evidence.
+ */
+&ufs_mem_hc {
+	reset-gpios = <&tlmm 150 GPIO_ACTIVE_LOW>;
+
+	vcc-supply = <&vreg_l20a_2p95>;
+	vcc-max-microamp = <600000>;
+
+	status = "okay";
+};
+
+&ufs_mem_phy {
+	vdda-phy-supply = <&vdda_ufs1_core>;
+	vdda-pll-supply = <&vdda_ufs1_1p2>;
+
+	status = "okay";
+};
+
+/*
+ * Stock exposes the external port as high-speed USB only.  Keep DWC3 in
+ * peripheral mode and remove the unverified USB3/DisplayPort PHY.
+ */
+&usb_1 {
+	qcom,select-utmi-as-pipe-clk;
+	status = "okay";
+};
+
+&usb_1_dwc3 {
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+	phys = <&usb_1_hsphy>;
+	phy-names = "usb2-phy";
+};
+
+&usb_1_hsphy {
+	vdd-supply = <&vdda_usb1_ss_core>;
+	vdda-pll-supply = <&vdda_qusb_hs0_1p8>;
+	vdda-phy-dpdm-supply = <&vdda_qusb_hs0_3p1>;
+
+	/*
+	 * These regulator child fwnodes are not independent platform devices.
+	 * Mark only their ordering links non-blocking while retaining all three
+	 * real supply properties.  This is the live-validated r32 USB fix.
+	 */
+	post-init-providers = <&vreg_l1a_0p875
+			       &vreg_l12a_1p8
+			       &vreg_l24a_3p075>;
+
+	qcom,imp-res-offset-value = <8>;
+	qcom,hstx-trim-value = <QUSB2_V2_HSTX_TRIM_21_6_MA>;
+	qcom,preemphasis-level = <QUSB2_V2_PREEMPHASIS_5_PERCENT>;
+	qcom,preemphasis-width = <QUSB2_V2_PREEMPHASIS_WIDTH_HALF_BIT>;
+
+	status = "okay";
+};
+
+&usb_1_qmpphy {
+	status = "disabled";
+};
+
+/*
+ * Safety fence: these blocks are intentionally unavailable in revision 0.
+ * Most are already disabled by sdm845.dtsi; explicit overrides document and
+ * enforce the bring-up boundary if include defaults change later.
+ */
+&adsp_pas { status = "disabled"; };
+&camss { status = "disabled"; };
+&cdsp_pas { status = "disabled"; };
+&gpu { status = "disabled"; };
+&ipa { status = "disabled"; };
+&mdss { status = "disabled"; };
+&mdss_dp { status = "disabled"; };
+&mdss_dsi0 { status = "disabled"; };
+&mdss_dsi0_phy { status = "disabled"; };
+&mdss_dsi1 { status = "disabled"; };
+&mdss_dsi1_phy { status = "disabled"; };
+&mss_pil { status = "disabled"; };
+&pcie0 { status = "disabled"; };
+&pcie1 { status = "disabled"; };
+&pmi8998_charger { status = "disabled"; };
+&pmi8998_fg { status = "disabled"; };
+&pmi8998_haptics { status = "disabled"; };
+&pmi8998_wled { status = "disabled"; };
+&sdhc_2 { status = "disabled"; };
+&slim { status = "disabled"; };
+&sound { status = "disabled"; };
+&usb_2 { status = "disabled"; };
+&venus { status = "disabled"; };
+&wifi { status = "disabled"; };
+
+/*
+ * Do not let the PMI8998 display rails probe just because pmi8998.dtsi is
+ * included.  M1892 panel sequencing is not yet represented in mainline.
+ */
+&ibb { status = "disabled"; };
+&lab { status = "disabled"; };
+
+/* Keep all peripheral buses closed except QUPv3 SE9 used by uart9. */
+&qupv3_id_0 { status = "disabled"; };
+&i2c8 { status = "disabled"; };
+&i2c9 { status = "disabled"; };
+&i2c10 { status = "disabled"; };
+&i2c11 { status = "disabled"; };
+&i2c12 { status = "disabled"; };
+&i2c13 { status = "disabled"; };
+&i2c14 { status = "disabled"; };
+&i2c15 { status = "disabled"; };
+&spi8 { status = "disabled"; };
+&spi9 { status = "disabled"; };
+&spi10 { status = "disabled"; };
+&spi11 { status = "disabled"; };
+&spi12 { status = "disabled"; };
+&spi13 { status = "disabled"; };
+&spi14 { status = "disabled"; };
+&spi15 { status = "disabled"; };

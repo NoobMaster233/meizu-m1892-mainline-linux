@@ -1,0 +1,12 @@
+# target	mode
+/etc/NetworkManager/system-connections/m1892-cellular.nmconnection	0600
+/etc/conf.d/greetd	0644
+/etc/dconf/db/local.d/00-m1892-r6-development-session	0644
+/etc/dconf/profile/user	0644
+/etc/init.d/m1892-r6-first-boot	0755
+/etc/phrog/greetd-config.toml	0644
+/etc/skel/.config/autostart/mobi.phosh.Shell.desktop	0644
+/etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop	0644
+/etc/skel/.local/share/applications/sm.puri.OSK0.desktop	0644
+/usr/bin/phoc	0755
+/usr/local/libexec/m1892-phosh-session-r237	0755

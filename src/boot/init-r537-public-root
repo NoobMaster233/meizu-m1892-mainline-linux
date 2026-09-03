@@ -1,0 +1,289 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: MIT
+set -u
+
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export PATH
+/bin/busybox --install -s /bin
+
+mkdir -p /dev /proc /sys /run /tmp /newroot /sys/kernel/debug \
+	/sys/kernel/config /sys/fs/pstore
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+mount -t tmpfs -o mode=0755,nodev,nosuid tmpfs /run 2>/dev/null || true
+mount -t tmpfs -o mode=1777,nodev,nosuid tmpfs /tmp 2>/dev/null || true
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
+mount -t configfs configfs /sys/kernel/config 2>/dev/null || true
+mount -t pstore pstore /sys/fs/pstore 2>/dev/null || true
+
+log()
+{
+	message="m1892-public-initramfs: $*"
+	echo "$message" >/dev/console 2>/dev/null || true
+	echo "$message" >/dev/kmsg 2>/dev/null || true
+	echo "$message" >/dev/pmsg0 2>/dev/null || true
+}
+
+cmdline_value()
+{
+	key=$1
+	# The kernel command line is a space-delimited list.
+	# shellcheck disable=SC2046
+	set -- $(cat /proc/cmdline 2>/dev/null || true)
+	for item do
+		case "$item" in "$key"=*) echo "${item#*=}"; return 0 ;; esac
+	done
+	return 1
+}
+
+platform_driver_name()
+{
+	path=/sys/bus/platform/devices/$1/driver
+	[ -L "$path" ] || { echo none; return 0; }
+	target=$(readlink -f "$path" 2>/dev/null || true)
+	echo "${target##*/}"
+}
+
+rescue_shell()
+{
+	terminal=$1
+	tag=${terminal##*/}
+	child_file=/run/m1892-public-shell-$tag.pid
+	child=
+	[ -c "$terminal" ] || return 0
+	trap '
+		if [ -n "$child" ]; then
+			kill -KILL "$child" 2>/dev/null || true
+			wait "$child" 2>/dev/null || true
+		fi
+		rm -f "$child_file"
+		exit 0
+	' TERM INT
+	while true; do
+		setsid sh -c "exec sh -l <'$terminal' >'$terminal' 2>&1" &
+		child=$!
+		echo "$child" >"$child_file"
+		wait "$child" 2>/dev/null || true
+		child=
+		rm -f "$child_file"
+		sleep 1
+	done
+}
+
+configure_development_usb()
+{
+	mode=$(cmdline_value m1892.usb || true)
+	[ "$mode" = acm-ncm ] || {
+		log "development USB disabled mode=${mode:-unset}"
+		return 0
+	}
+	gadget=/sys/kernel/config/usb_gadget/m1892
+	[ -d /sys/kernel/config/usb_gadget ] || {
+		log 'development USB unavailable: configfs gadget absent'
+		return 1
+	}
+	mkdir -p "$gadget/strings/0x409" "$gadget/configs/c.1/strings/0x409"
+	echo 0x1d6b >"$gadget/idVendor"
+	echo 0x0104 >"$gadget/idProduct"
+	echo 0xef >"$gadget/bDeviceClass"
+	echo 0x02 >"$gadget/bDeviceSubClass"
+	echo 0x01 >"$gadget/bDeviceProtocol"
+	echo M1892MAINLINE >"$gadget/strings/0x409/serialnumber"
+	echo 'Meizu mainline public-initramfs diagnostic' >"$gadget/strings/0x409/manufacturer"
+	echo 'M1892 public initramfs ACM plus NCM' >"$gadget/strings/0x409/product"
+	echo 'CDC NCM network and ACM console' >"$gadget/configs/c.1/strings/0x409/configuration"
+	echo 250 >"$gadget/configs/c.1/MaxPower"
+	if mkdir "$gadget/functions/ncm.usb0" 2>/dev/null; then
+		echo 02:00:00:45:18:92 >"$gadget/functions/ncm.usb0/dev_addr"
+		echo 02:00:00:45:18:93 >"$gadget/functions/ncm.usb0/host_addr"
+		ln -s "$gadget/functions/ncm.usb0" "$gadget/configs/c.1/" 2>/dev/null || true
+	fi
+	if mkdir "$gadget/functions/acm.usb0" 2>/dev/null; then
+		ln -s "$gadget/functions/acm.usb0" "$gadget/configs/c.1/" 2>/dev/null || true
+	fi
+	udc=
+	for candidate in /sys/class/udc/*; do
+		[ -e "$candidate" ] || continue
+		udc=${candidate##*/}
+		break
+	done
+	[ -n "$udc" ] || { log 'development USB unavailable: UDC=none'; return 1; }
+	echo "$udc" >"$gadget/UDC"
+	for interface in usb0 ncm0; do
+		[ -e "/sys/class/net/$interface" ] || continue
+		ifconfig "$interface" 169.254.45.1 netmask 255.255.0.0 up || true
+		break
+	done
+	log "development USB configured UDC=$udc"
+}
+
+probe_platform_device()
+{
+	device=$1
+	path=/sys/bus/platform/devices/$device
+	[ -e "$path" ] || return 1
+	[ ! -L "$path/driver" ] || return 0
+	printf '%s\n' "$device" >/sys/bus/platform/drivers_probe 2>/dev/null || true
+	[ -L "$path/driver" ]
+}
+
+bind_platform_device()
+{
+	device=$1
+	driver=$2
+	path=/sys/bus/platform/devices/$device
+	driver_path=/sys/bus/platform/drivers/$driver
+	[ -e "$path" ] || { log "platform absent device=$device"; return 1; }
+	[ ! -L "$path/driver" ] || return 0
+	[ -w "$driver_path/bind" ] || {
+		log "platform driver unavailable device=$device driver=$driver"
+		return 1
+	}
+	if ! printf '%s\n' "$device" >"$driver_path/bind" 2>/dev/null; then
+		log "platform bind write failed device=$device driver=$driver"
+	fi
+	if [ -L "$path/driver" ]; then
+		log "platform bound device=$device driver=$(platform_driver_name "$device")"
+		return 0
+	fi
+	log "platform remains unbound device=$device driver=$driver"
+	return 1
+}
+
+bring_up_storage()
+{
+	# The accepted M1892 kernel intentionally avoids the unsafe global deferred
+	# probe trigger.  Bind only the public provider/storage chain required for
+	# userdata; no device firmware is needed for these built-in drivers.
+	probe_platform_device 100000.clock-controller || true
+	probe_platform_device 179c0000.rsc:clock-controller || true
+	# The accepted path binds this provider while preparing USB before it
+	# attempts UFS. UFS PHY supplies can defer forever when it is omitted.
+	bind_platform_device 179c0000.rsc:regulators-0 qcom-rpmh-regulator || return 1
+	sleep 1
+	probe_platform_device 784000.qfprom || true
+	# Skipping the accepted QUSB2/DWC3 provider sequence can
+	# leave the subsequent UFS path unavailable. These are firmware-free,
+	# built-in providers and are safe to probe individually; never trigger the
+	# global deferred-probe queue on this device.
+	bind_platform_device 88e2000.phy qcom-qusb2-phy || true
+	sleep 1
+	probe_platform_device a6f8800.usb || true
+	sleep 1
+	bind_platform_device 1d87000.phy qcom-qmp-ufs-phy || return 1
+	sleep 1
+	bind_platform_device 1d84000.ufshc ufshcd-qcom || return 1
+	sleep 3
+	mdev -s 2>/dev/null || true
+	[ -b /dev/sda19 ]
+}
+
+bring_up_haptics()
+{
+	# Physical testing accepted this one-provider bind.  The global
+	# deferred-probe trigger remains forbidden: bind only QUP1, then require
+	# the standard FF endpoint to be idle and electrically powered off.  The
+	# locally extracted waveform is not requested until userspace asks for a
+	# feedback event after switch_root.
+	bind_platform_device ac0000.geniqup geni_se_qup || return 1
+	haptic=/sys/bus/i2c/devices/12-0059
+	elapsed=0
+	while [ "$elapsed" -lt 20 ]; do
+		[ -L "$haptic/driver" ] && break
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	[ -L "$haptic/driver" ] || return 1
+	safety=$(cat "$haptic/safety" 2>/dev/null || true)
+	case "$safety" in
+		*'gpio_atomic=1'*'pulses=0 powered=0'*) ;;
+		*) log "haptics unsafe initial state: ${safety:-unavailable}"; return 1 ;;
+	esac
+	log 'bounded DW7914 FF endpoint ready; boot output absent and GPIO power off'
+}
+
+root_identity_ok()
+{
+	[ -b /dev/sda19 ] || return 1
+	[ "$(tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null)" = \
+		'Meizu 16th Plus (M1892)' ] || return 1
+	grep -qx 'DEVNAME=sda19' /sys/class/block/sda19/uevent || return 1
+	grep -qx 'PARTN=19' /sys/class/block/sda19/uevent || return 1
+	grep -qx 'PARTNAME=userdata' /sys/class/block/sda19/uevent || return 1
+	[ "$(tr -d ' \t\r\n' </sys/class/block/sda19/ro)" = 0 ] || return 1
+	bytes=$(blockdev --getsize64 /dev/sda19) || return 1
+	[ "$bytes" -ge 8589934592 ] || return 1
+	identity=$(blkid /dev/sda19 2>/dev/null || true)
+	case "$identity" in *'LABEL="pmOS_root"'*) ;; *) return 1 ;; esac
+	case "$identity" in *'UUID="3982b874-0ec0-57c4-a83b-37965b6be709"'*) ;; *) return 1 ;; esac
+	case "$identity" in *'TYPE="ext4"'*) ;; *) return 1 ;; esac
+}
+
+root_tree_ok()
+{
+	grep -qx 'ID="postmarketos"' /newroot/etc/os-release || return 1
+	grep -qx 'ID_LIKE="alpine"' /newroot/etc/os-release || return 1
+	[ -x /newroot/bin/busybox ] || return 1
+	[ -L /newroot/sbin/init ] || return 1
+	[ "$(readlink /newroot/sbin/init)" = /bin/busybox ] || return 1
+	[ -r /newroot/etc/inittab ] || return 1
+	[ -x /newroot/etc/init.d/sshd ] || return 1
+	[ -x /newroot/etc/init.d/networkmanager ] || return 1
+	grep -q 'UUID=3982b874-0ec0-57c4-a83b-37965b6be709 / ext4' \
+		/newroot/etc/fstab || return 1
+}
+
+log 'public firmware-free observable root handoff reached'
+echo /bin/mdev >/proc/sys/kernel/hotplug 2>/dev/null || true
+mdev -s 2>/dev/null || true
+if bring_up_storage; then
+	log 'public UFS provider chain ready'
+else
+	log 'public UFS provider chain not ready; bounded retry follows'
+fi
+if ! bring_up_haptics; then
+	log 'bounded DW7914 endpoint unavailable; continuing without haptics'
+fi
+configure_development_usb || true
+rescue_shell /dev/ttyMSM0 &
+serial_msm_pid=$!
+rescue_shell /dev/ttyGS0 &
+serial_usb_pid=$!
+
+elapsed=0
+while [ "$elapsed" -le 180 ]; do
+	mdev -s 2>/dev/null || true
+	if [ "$elapsed" -ne 0 ] && [ $((elapsed % 10)) -eq 0 ]; then
+		bring_up_storage || true
+	fi
+	if root_identity_ok; then
+		if mount -t ext4 -o ro,noload /dev/sda19 /newroot && root_tree_ok; then
+			umount /newroot || break
+			if mount -t ext4 -o rw,noatime /dev/sda19 /newroot && root_tree_ok; then
+				mkdir -p /newroot/proc /newroot/sys /newroot/dev /newroot/run
+					log 'generic M1892 root accepted; switch_root'
+					kill "$serial_msm_pid" "$serial_usb_pid" 2>/dev/null || true
+					wait "$serial_msm_pid" "$serial_usb_pid" 2>/dev/null || true
+				mount -o move /proc /newroot/proc || break
+				mount -o move /sys /newroot/sys || break
+				mount -o move /dev /newroot/dev || break
+				mount -o move /run /newroot/run || break
+				exec switch_root -c /dev/console /newroot /sbin/init
+			fi
+		fi
+		umount /newroot 2>/dev/null || true
+	fi
+	if [ $((elapsed % 20)) -eq 0 ]; then
+		log "waiting for generic root elapsed=${elapsed}s regulator=$(platform_driver_name 179c0000.rsc:regulators-0) phy=$(platform_driver_name 1d87000.phy) host=$(platform_driver_name 1d84000.ufshc) sda19=$([ -b /dev/sda19 ] && echo present || echo absent)"
+		if [ -r /sys/kernel/debug/devices_deferred ]; then
+			grep -E '179c0000.rsc:regulators-0|1d87000.phy|1d84000.ufshc' \
+				/sys/kernel/debug/devices_deferred >/dev/pmsg0 2>/dev/null || true
+		fi
+	fi
+	sleep 2
+	elapsed=$((elapsed + 2))
+done
+
+log 'fail-closed rescue hold; root was not modified; use reboot-fastboot bootloader'
+while true; do sleep 3600; done

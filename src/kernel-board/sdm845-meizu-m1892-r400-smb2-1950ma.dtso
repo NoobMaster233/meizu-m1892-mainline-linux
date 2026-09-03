@@ -1,0 +1,23 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * M1892 R400 internal-SMB2 5-V ceiling validation.
+ *
+ * R399 proved 151 consecutive low-state-of-charge samples at 5 V / 1.5 A
+ * with Good health, 25.0 C battery temperature and no UFS/ext4 fault.  The
+ * locally reviewed qcom_smbx driver already caps FAST_CHARGE_CURRENT_CFG at
+ * its historical 1.95-A ceiling and keeps an SDP source at 500 mA.  Raise the
+ * DCP/battery ceiling to that internal-driver maximum only.  HVDCP, mCharge
+ * negotiation and both external SMB1355 devices remain disabled.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/battery";
+
+		__overlay__ {
+			constant-charge-current-max-microamp = <1950000>;
+		};
+	};
+};

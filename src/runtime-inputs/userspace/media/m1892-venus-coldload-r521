@@ -1,0 +1,83 @@
+#!/bin/sh
+set -eu
+
+kernel=7.1.0-rc1-sdm845
+dev=/sys/bus/platform/devices/aa00000.video-codec
+core=/lib/modules/$kernel/kernel/drivers/media/platform/qcom/venus/venus-core.ko
+firmware=/lib/firmware/qcom/venus-5.2
+state=/run/m1892-venus-coldload-r521.state
+core_sha=bf0ddd26da2bc194c1b63a26d8c461ccaa76fe5564c8849c92d3fe73ed682655
+
+fail() { echo "M1892_VENUS_FAIL: $*" >&2; exit 1; }
+check_sha() { test "$(sha256sum "$1" | awk '{print $1}')" = "$2" || fail "hash:$1"; }
+
+test "$(id -u)" = 0 || fail root-required
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = \
+	'Meizu 16th Plus (M1892)' || fail wrong-hardware
+test "$(uname -r)" = "$kernel" || fail wrong-kernel
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail ext4-errors
+test -d "$dev" || fail platform-device-absent
+check_sha "$core" "$core_sha"
+while read -r expected file; do
+	check_sha "$firmware/$file" "$expected"
+done <<'EOF'
+14c5ff36b505333f3ad58713ca5537295227fd0fbfcf7744633f3cce04c0a05a venus.mbn
+2228be26411289cf94ebfd3f6c5ba3fc2dda985c5e825a784eeb2e74edb3ef0e venus.b00
+25a14e6315b4abb2e89efbfc74eba8763a62834d24b71f3197e0e87558155204 venus.b01
+8d7a4d34c60a74037e2c8f1696d0c9c28a65b20a991a6b9a000cc64531dc673b venus.b02
+3a71d6dd6098005e0e9ffb3249e13dd1f60baebf53ad5e26440636d271f41159 venus.b03
+43b09596e1496809aaa964b34c146580f0566c86bc9d7218a1288fd15fb93424 venus.b04
+EOF
+
+# modprobe is the sole owner of the initial bind.  If udev already loaded the
+# exact module this is a no-op. Writing the driver's bind
+# attribute after a failed automatic probe and caused a second same-boot probe.
+# Never unbind, reload, or manually bind this dynamic-child driver.
+before=$(dmesg | wc -l)
+modprobe venus-core
+modprobe venus-dec
+modprobe venus-enc
+
+i=0
+while ! test -e /dev/video0 -a -e /dev/video1; do
+	i=$((i + 1)); test "$i" -lt 80 || fail video-nodes
+	sleep 0.25
+done
+encoder=
+decoder=
+for sysnode in /sys/class/video4linux/video*; do
+	test -e "$sysnode/name" || continue
+	node=/dev/$(basename "$sysnode")
+	case "$(cat "$sysnode/name")" in
+		qcom-venus-encoder) encoder=$node ;;
+		qcom-venus-decoder) decoder=$node ;;
+	esac
+done
+test -n "$encoder" || fail encoder-node
+test -n "$decoder" || fail decoder-node
+i=0
+while test "$(cat "$dev/power/runtime_status")" != suspended; do
+	i=$((i + 1)); test "$i" -lt 80 || fail runtime-suspend
+	sleep 0.25
+done
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail post-load-ext4-errors
+delta=/run/m1892-venus-coldload-r521.dmesg
+dmesg | tail -n "+$((before + 1))" >"$delta"
+if grep -Eiq \
+	'Unable to handle kernel|Kernel panic|Oops:|BUG:|IOMMU.*fault|qcom-venus.*(fail|error|timeout)' \
+	"$delta"; then
+	fail critical-kernel-log
+fi
+
+{
+	echo implementation=venus-coldload
+	echo boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+	echo module_sha256="$core_sha"
+	echo firmware_sha256=14c5ff36b505333f3ad58713ca5537295227fd0fbfcf7744633f3cce04c0a05a
+	echo video_nodes=2
+	echo encoder_node="$encoder"
+	echo decoder_node="$decoder"
+	echo runtime_status=suspended
+	echo policy=exact-module-single-modprobe-no-manual-bind-no-live-unload
+} >"$state"
+echo M1892_VENUS_COLDLOAD_PASS

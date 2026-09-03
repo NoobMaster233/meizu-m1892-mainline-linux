@@ -1,0 +1,106 @@
+#!/bin/sh
+set -eu
+
+state=/run/m1892-rmtfs-shadow.state
+shadow=/run/m1892-rmtfs
+
+fail()
+{
+	reason=$1
+	{
+		echo outcome=fail
+		echo "reason=$reason"
+	} >"$state"
+	echo "M1892_RMTFS_SHADOW_FAIL: $reason" >&2
+	exit 1
+}
+
+resolve_partition()
+{
+	partname=$1
+	expected_sectors=$2
+	resolved=
+
+	for sysdev in /sys/class/block/*; do
+		test -r "$sysdev/uevent" || continue
+		name=
+		while IFS='=' read -r key value; do
+			test "$key" = PARTNAME && name=$value
+		done <"$sysdev/uevent"
+		test "$name" = "$partname" || continue
+
+		sectors=$(cat "$sysdev/size" 2>/dev/null || true)
+		test "$sectors" = "$expected_sectors" ||
+			fail "$partname size mismatch on ${sysdev##*/}: ${sectors:-unknown} sectors"
+		test -z "$resolved" || fail "$partname is ambiguous"
+		resolved=/dev/${sysdev##*/}
+	done
+
+	test -n "$resolved" || fail "$partname partition absent"
+	printf '%s\n' "$resolved"
+}
+
+copy_partition()
+{
+	partname=$1
+	sectors=$2
+	bytes=$3
+	source=$(resolve_partition "$partname" "$sectors")
+	destination=$shadow/$partname
+
+	test -b "$source" || fail "$partname source is not a block device"
+	test -z "$(findmnt -rn -S "$source" 2>/dev/null || true)" ||
+		fail "$partname source is mounted"
+	dd if="$source" of="$destination" bs=4096 count=$((bytes / 4096)) \
+		status=none || fail "$partname read-only copy failed"
+	test "$(stat -c %s "$destination")" = "$bytes" ||
+		fail "$partname shadow size mismatch"
+	chmod 0600 "$destination"
+}
+
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = \
+	'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(uname -r)" = 7.1.0-rc1-sdm845 || fail 'wrong kernel ABI'
+test "$(findmnt -n -o SOURCE /)" = /dev/sda19 || fail 'unexpected root'
+test -x /usr/bin/rmtfs || fail 'distribution rmtfs package absent'
+test -d /sys/class/rmtfs/qcom_rmtfs_mem1 || fail 'qcom_rmtfs_mem1 class absent'
+test -c /dev/qcom_rmtfs_mem1 || fail 'qcom_rmtfs_mem1 device absent'
+
+# Never create a second server alongside one inherited from an older private
+# initramfs.  The public recovery has no such process; this gate makes live
+# upgrades from an older private recovery harmless.
+if pgrep -x rmtfs >/dev/null 2>&1; then
+	pid=$(pgrep -o -x rmtfs)
+	args=$(tr '\000' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+	case "$args" in
+		*'-o /run/m1892-rmtfs'*) ;;
+		*) fail "unrecognized inherited rmtfs process: $args" ;;
+	esac
+	{
+		echo outcome=pass
+		echo mode=inherited
+		echo "pid=$pid"
+		echo backing=ram-shadow
+	} >"$state"
+	echo "M1892_RMTFS_SHADOW_PASS mode=inherited pid=$pid"
+	exit 0
+fi
+
+rm -rf "$shadow"
+install -d -m 0700 "$shadow"
+copy_partition modemst1 4096 2097152
+copy_partition modemst2 4096 2097152
+copy_partition fsg 4096 2097152
+copy_partition fsc 256 131072
+
+{
+	echo outcome=starting
+	echo mode=distribution-rmtfs
+	echo backing=ram-shadow
+	echo rmtfs_version=1.3-r0
+} >"$state"
+
+# Deliberately omit -s: module order and MPSS start belong to the following
+# radio-bootstrap service.  Writes requested by the modem land only in /run.
+# Verbose packet logging was useful during bring-up but is not a daily default.
+exec /usr/bin/rmtfs -P -o "$shadow"

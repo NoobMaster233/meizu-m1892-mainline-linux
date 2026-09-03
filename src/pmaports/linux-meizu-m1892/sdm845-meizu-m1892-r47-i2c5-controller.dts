@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R47 touch-bus controller isolation stage.
+ *
+ * This revision retains the live-validated R46 display, USB and UFS setup,
+ * and enables only the QUPv3 ID0 wrapper plus SE5 in I2C mode.  It
+ * intentionally declares no I2C child, touch regulator, interrupt or reset
+ * GPIO.  The purpose is to prove that the mainline GENI I2C controller at
+ * the stock M1892 address (0x00894000) can bind and remain stable before any
+ * touch-panel power or reset transition is attempted.
+ */
+
+#include "sdm845-meizu-m1892-sofef00m.dts"
+
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&i2c5 {
+	clock-frequency = <100000>;
+	status = "okay";
+};

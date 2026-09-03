@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: MIT
+name: Publish owner builder image
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing audited release tag
+        required: true
+        default: 2026.09-developer-preview.17
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
+      - name: Verify source contract
+        run: ./scripts/verify-public-tree.sh .
+      - name: Verify draft Release contract before publishing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft \
+            --jq '.isDraft' | grep -Fx true
+      - name: Build and publish Flyme-free tool image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/meizu-m1892-owner-builder"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker manifest inspect "$image:$RELEASE_TAG" >/dev/null 2>&1; then
+            docker pull "$image:$RELEASE_TAG"
+            test "$(docker inspect --format \
+              '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+              "$image:$RELEASE_TAG")" = "$GITHUB_SHA"
+          else
+            docker build --pull --build-arg "M1892_RELEASE_TAG=$RELEASE_TAG" \
+              --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --label "org.opencontainers.image.version=$RELEASE_TAG" \
+              -f docker/owner-builder.Dockerfile -t "$image:$RELEASE_TAG" .
+            set +e
+            smoke_output="$(docker run --rm "$image:$RELEASE_TAG" 2>&1)"
+            smoke_rc=$?
+            set -e
+            test "$smoke_rc" -ne 0
+            printf '%s\n' "$smoke_output" | grep -F \
+              'M1892_OWNER_BUNDLE_FAIL: missing-flyme-zip'
+            docker run --rm "$image:$RELEASE_TAG" --container-selftest | grep -Fx \
+              'M1892_OWNER_CONTAINER_SELFTEST_PASS'
+            docker push "$image:$RELEASE_TAG"
+          fi
+          digest="$(docker buildx imagetools inspect "$image:$RELEASE_TAG" | \
+            awk '/^Digest:/ {print $2; exit}')"
+          test -n "$digest"
+          printf '%s@%s\n' "$image" "$digest" >m1892-owner-builder.digest
+          cat m1892-owner-builder.digest >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: m1892-owner-builder-digest
+          path: m1892-owner-builder.digest
+          retention-days: 7
+      - name: Attach immutable digest to the existing draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mkdir digest-check
+          if gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern m1892-owner-builder.digest --dir digest-check; then
+            cmp -s m1892-owner-builder.digest digest-check/m1892-owner-builder.digest
+          else
+            gh release upload "$RELEASE_TAG" m1892-owner-builder.digest \
+              --repo "$GITHUB_REPOSITORY"
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern m1892-owner-builder.digest --dir digest-check
+            cmp -s m1892-owner-builder.digest digest-check/m1892-owner-builder.digest
+          fi

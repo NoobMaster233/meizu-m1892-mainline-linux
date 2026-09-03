@@ -1,0 +1,13 @@
+[terminal]
+vt = 7
+
+# The developer preview enters the unlocked session directly. Keep the packaged
+# Phrog client only as greetd's protocol-compatible fallback; Phosh is not a
+# greetd greeter and therefore belongs exclusively in initial_session.
+[default_session]
+command = "/usr/libexec/phrog-greetd-session"
+user = "greetd"
+
+[initial_session]
+command = "/usr/local/libexec/m1892-phosh-session-r237"
+user = "@PMOS_USER@"

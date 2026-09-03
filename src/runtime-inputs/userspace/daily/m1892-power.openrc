@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+description="M1892 battery and conservative charger initialization"
+
+depend()
+{
+	need modules udev
+	after udev-trigger udev-settle localmount
+	before greetd
+}
+
+start()
+{
+	ebegin "$description"
+	/usr/local/sbin/m1892-power start >/var/log/m1892-power.log 2>&1
+	eend $?
+}
+
+stop()
+{
+	# Power-supply drivers remain bound through orderly shutdown.
+	rm -f /run/m1892-power.state
+}

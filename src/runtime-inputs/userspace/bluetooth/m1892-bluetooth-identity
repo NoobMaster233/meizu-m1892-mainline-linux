@@ -1,0 +1,93 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+umask 077
+
+state=/run/m1892-bluetooth-identity.state
+
+fail()
+{
+	echo "M1892_BLUETOOTH_IDENTITY_FAIL: $1" >&2
+	exit 1
+}
+
+test "$(id -u)" = 0 || fail 'root required'
+test "$(findmnt -n -o SOURCE /)" = /dev/sda19 || fail 'persistent root absent'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS not running'
+command -v qmicli >/dev/null || fail 'qmicli absent'
+command -v btmgmt >/dev/null || fail 'btmgmt absent'
+
+remoteproc=$(sed -n 's/^remoteproc=//p' /run/m1892-radio-bootstrap.state 2>/dev/null |
+	head -1)
+test -n "$remoteproc" || fail 'radio bootstrap remoteproc evidence absent'
+test "$(cat "/sys/class/remoteproc/$remoteproc/state")" = running ||
+	fail 'MPSS not running'
+
+qmi_output=$(timeout 12 qmicli -d qrtr://0 --dms-get-mac-address=bt 2>&1) ||
+	fail 'QMI DMS Bluetooth address query failed'
+raw=$(printf '%s\n' "$qmi_output" |
+	awk '/Contents:/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}')
+printf '%s\n' "$raw" |
+	grep -Eq '^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$' ||
+	fail 'invalid QMI DMS address'
+raw=$(printf '%s\n' "$raw" | tr '[:lower:]' '[:upper:]')
+address=$(printf '%s\n' "$raw" |
+	awk -F: '{print $6":"$5":"$4":"$3":"$2":"$1}')
+case $address in
+	00:00:00:00:00:00|FF:FF:FF:FF:FF:FF) fail 'invalid factory address' ;;
+esac
+first_octet=${address%%:*}
+test $((0x$first_octet & 1)) -eq 0 || fail 'multicast factory address'
+
+waited=0
+hci=
+while test "$waited" -lt 150; do
+	for path in /sys/class/bluetooth/hci*; do
+		test -e "$path" || continue
+		hci=${path##*/}
+		break
+	done
+	test -z "$hci" || break
+	waited=$((waited + 1))
+	sleep 0.1
+done
+test -n "$hci" || fail 'HCI controller did not appear'
+index=${hci#hci}
+case $index in ''|*[!0-9]*) fail 'invalid HCI index' ;; esac
+
+current=$(btmgmt info 2>/dev/null |
+	awk '/^[[:space:]]*addr / {print toupper($2); exit}')
+if test "$current" != "$address"; then
+	btmgmt --index "$index" power off >/dev/null 2>&1 || true
+	btmgmt --index "$index" public-addr "$address" \
+		>/run/m1892-bluetooth-btmgmt.log 2>&1 || {
+		cat /run/m1892-bluetooth-btmgmt.log >&2
+		fail 'MGMT public-address update failed'
+	}
+fi
+
+settled=0
+while test "$settled" -lt 150; do
+	info=$(btmgmt info 2>/dev/null || true)
+	if printf '%s\n' "$info" | grep -Fqi "addr $address " &&
+		btmgmt config 2>/dev/null |
+		grep -qx 'Unconfigured index list with 0 items'; then
+		break
+	fi
+	settled=$((settled + 1))
+	sleep 0.1
+done
+test "$settled" -lt 150 || fail 'factory identity did not settle'
+
+{
+	echo format=m1892-bluetooth-identity-v1
+	echo source=qmi-dms-bt
+	echo qmi_byte_order=controller-little-endian
+	echo address="$address"
+	echo configured=yes
+	echo hci_index="$index"
+	echo index_wait_deciseconds="$waited"
+	echo settle_deciseconds="$settled"
+} >"$state"
+
+echo "M1892_BLUETOOTH_IDENTITY_PASS configured=yes index_wait_deciseconds=$waited settle_deciseconds=$settled"

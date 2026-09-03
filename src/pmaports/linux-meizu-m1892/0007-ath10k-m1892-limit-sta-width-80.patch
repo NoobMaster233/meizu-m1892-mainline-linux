@@ -1,0 +1,60 @@
+From: M1892 mainline bring-up <m1892@example.com>
+Subject: [PATCH] wifi: ath10k: limit M1892 160 MHz STA start to primary 80 MHz
+
+The M1892 WCN3990 firmware reports COMPLETE_NO_ACK for authentication
+frames when a STA vdev is started directly at 160 MHz against at least one
+contiguous-160-MHz channel-36 AP.  Starting the vdev in the 80-MHz primary
+segment makes the unchanged AP acknowledge authentication and permits WPA,
+DHCP and normal 2x2 VHT data operation.
+
+Restrict the workaround to the Meizu M1892 root compatible and to 160-MHz
+STA starts.  Other ath10k platforms and channel widths are unchanged.
+
+---
+ drivers/net/wireless/ath/ath10k/mac.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/drivers/net/wireless/ath/ath10k/mac.c b/drivers/net/wireless/ath/ath10k/mac.c
+index 8e604697d..e6a05eb1c 100644
+--- a/drivers/net/wireless/ath/ath10k/mac.c
++++ b/drivers/net/wireless/ath/ath10k/mac.c
+@@ -1509,6 +1509,7 @@ static int ath10k_vdev_start_restart(struct ath10k_vif *arvif,
+ 				     bool restart)
+ {
+ 	struct ath10k *ar = arvif->ar;
++	struct cfg80211_chan_def compat_chandef;
+ 	struct wmi_vdev_start_request_arg arg = {};
+ 	int ret = 0;
+ 
+@@ -1517,6 +1518,29 @@ static int ath10k_vdev_start_restart(struct ath10k_vif *arvif,
+ 	reinit_completion(&ar->vdev_setup_done);
+ 	reinit_completion(&ar->vdev_delete_done);
+ 
++	/*
++	 * The M1892 WCN3990 reports COMPLETE_NO_ACK for authentication frames
++	 * when a STA vdev is started directly at 160 MHz.  The downstream driver
++	 * handles this firmware/AP combination, but ath10k does not.  Start the
++	 * vdev in the 80 MHz primary segment; this keeps 5 GHz usable without
++	 * changing the AP and avoids altering other ath10k platforms.
++	 */
++	if (of_machine_is_compatible("meizu,m1892") &&
++	    arvif->vdev_type == WMI_VDEV_TYPE_STA &&
++	    chandef->width == NL80211_CHAN_WIDTH_160) {
++		compat_chandef = *chandef;
++		compat_chandef.width = NL80211_CHAN_WIDTH_80;
++		compat_chandef.center_freq1 =
++			cfg80211_chandef_primary(chandef,
++						 NL80211_CHAN_WIDTH_80, NULL);
++		compat_chandef.center_freq2 = 0;
++		ath10k_dbg(ar, ATH10K_DBG_MAC,
++			   "mac m1892 limit sta vdev start 160mhz center %u to 80mhz center %u primary %u\n",
++			   chandef->center_freq1, compat_chandef.center_freq1,
++			   chandef->chan->center_freq);
++		chandef = &compat_chandef;
++	}
++
+ 	arg.vdev_id = arvif->vdev_id;
+ 	arg.dtim_period = arvif->dtim_period;
+ 	arg.bcn_intval = arvif->beacon_interval;
+-- 
+2.39.5

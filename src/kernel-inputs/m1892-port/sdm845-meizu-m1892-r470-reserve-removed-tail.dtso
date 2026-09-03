@@ -1,0 +1,28 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Stock M1892 reserves removed_region@85fc0000 through 0x8aafffff.
+ * Mainline already describes the known AOP/SMEM/TZ subranges, while EFI
+ * keeps most of the remaining hole out of System RAM.  The final 2 MiB at
+ * 0x8a900000 nevertheless leaks into the page allocator.  R469 proved a
+ * reproducible CPU hard lock while cleaning a UFS DMA segment at 0x8aa00000.
+ * Restore only that leaked tail as no-map; do not overlap existing nodes.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/reserved-memory";
+
+		__overlay__ {
+			/* Match the parent bus so dtc validates the 4-cell reg tuple. */
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			m1892_removed_tail: m1892-removed-tail@8a900000 {
+				reg = <0 0x8a900000 0 0x00200000>;
+				no-map;
+			};
+		};
+	};
+};

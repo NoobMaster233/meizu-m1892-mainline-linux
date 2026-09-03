@@ -1,0 +1,4 @@
+.nofail
+load-module module-alsa-card device_id=0 name=platform-sound card_name=alsa_card.platform-sound sink_name=m1892_speaker source_name=m1892_microphone use_ucm=yes tsched=no
+set-default-sink m1892_speaker
+.fail

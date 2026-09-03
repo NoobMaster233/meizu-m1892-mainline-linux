@@ -1,0 +1,9 @@
+# Meizu 16th Plus / M1892 ICM206XX is mounted 180 degrees around the
+# display-normal Z axis relative to iio-sensor-proxy's default SSC frame.
+#
+# iio-sensor-proxy 3.9 may associate the QRTR/SSC accelerometer with either
+# FastRPC class device. Current discovery selects
+# adsp and otherwise silently falls back to the identity matrix.  Keep both
+# providers consistent so discovery order cannot invert the display again.
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp*", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, -1, 0; 0, 0, 1"
+SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp*", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, -1, 0; 0, 0, 1"

@@ -1,0 +1,73 @@
+#!/sbin/openrc-run
+
+description="Expand the M1892 root, compile defaults and generate per-install identity"
+marker=/var/lib/m1892/r6-first-boot-complete
+identity_marker=/var/lib/m1892/r6-first-boot-identity-complete
+root_device=/dev/sda19
+root_uuid=3982b874-0ec0-57c4-a83b-37965b6be709
+root_min_bytes=8589934592
+
+depend()
+{
+	need localmount udev
+	after udev-trigger udev-settle
+	before greetd sshd
+}
+
+start()
+{
+	if test -e "$marker"; then
+		return 0
+	fi
+	ebegin "Initializing the M1892 installation"
+	if ! test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = \
+		'Meizu 16th Plus (M1892)' ||
+		! test "$(findmnt -n -o SOURCE /)" = "$root_device" ||
+		! grep -qx 'DEVNAME=sda19' /sys/class/block/sda19/uevent ||
+		! grep -qx 'PARTN=19' /sys/class/block/sda19/uevent ||
+		! grep -qx 'PARTNAME=userdata' /sys/class/block/sda19/uevent ||
+		! test "$(findmnt -n -o UUID /)" = "$root_uuid" ||
+		! test "$(blockdev --getsize64 "$root_device")" -ge \
+			"$root_min_bytes"; then
+		eerror "Refusing first boot on an unexpected root target"
+		eend 1
+		return 1
+	fi
+	install -d -m 0755 /var/lib/m1892
+	# Authentication policy and the diagnostic SSH identity are independent of
+	# optional per-phone sensor calibration.  In the original public flow the
+	# calibration import came first in one short-circuit expression: a late
+	# persist/by-partlabel symlink therefore skipped dconf compilation and host
+	# key generation, leaving a locked-password account behind an impossible
+	# Phosh password prompt.  Establish these essential properties before any
+	# hardware-specific import and record them separately.
+	if ! test -e "$identity_marker"; then
+		if ! dconf update || ! ssh-keygen -A; then
+			eerror "Could not establish the local session and SSH identity"
+			eend 1
+			return 1
+		fi
+		: >"$identity_marker"
+	fi
+	# A public fastboot sparse image carries an 8-GiB ext4 filesystem even
+	# when userdata is much larger.  Establish the passwordless development
+	# session above before attempting online growth: a storage fault must remain
+	# visible as a failed first-boot service, but must never strand a locked
+	# account behind an impossible password prompt.
+	if ! resize2fs "$root_device"; then
+		eerror "Could not expand the filesystem to userdata"
+		eend 1
+		return 1
+	fi
+	# Persist is read-only and udev may still expose its stable by-partlabel
+	# alias late on some boots.  Do not relock or block the graphical session if
+	# calibration is temporarily unavailable; leave the completion marker
+	# absent so the next cold boot retries the import.
+	if ! /usr/local/sbin/m1892-persist-sensors-import --install; then
+		ewarn "Sensor calibration import deferred until the next cold boot"
+		eend 0
+		return 0
+	fi
+	: >"$marker"
+	eend 0
+}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Deep Sleep
+Name[zh_CN]=深度休眠
+Comment=Explicitly suspend the whole phone; short-press power to wake
+Comment[zh_CN]=让整机进入深度休眠，短按电源键唤醒
+Exec=/usr/local/bin/m1892-suspend
+TryExec=/usr/local/bin/m1892-suspend
+Icon=system-suspend
+Terminal=false
+Categories=System;
+Keywords=suspend;sleep;休眠;待机;
+StartupNotify=false

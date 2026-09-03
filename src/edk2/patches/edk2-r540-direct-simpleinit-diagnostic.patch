@@ -1,0 +1,60 @@
+diff --git a/Platform/RenegadePkg/Library/PlatformBootManagerLib/PlatformBm.c b/Platform/RenegadePkg/Library/PlatformBootManagerLib/PlatformBm.c
+index 8f3cb32..94952be 100644
+--- a/Platform/RenegadePkg/Library/PlatformBootManagerLib/PlatformBm.c
++++ b/Platform/RenegadePkg/Library/PlatformBootManagerLib/PlatformBm.c
+@@ -21,0 +22 @@
++#include <Library/PrintLib.h>
+@@ -87,0 +89,8 @@ STATIC PLATFORM_SERIAL_CONSOLE mSerialConsole = {
++#ifdef ENABLE_SIMPLE_INIT
++// Keep the option number returned by the single registration performed in
++// PlatformRegisterOptionsAndKeys().  Registering the same FV application a
++// second time from AfterConsole can fault before any diagnostic text reaches
++// the display.
++STATIC UINT16 mSimpleInitOptionNumber = 0xFFFF;
++#endif
++
+@@ -456 +465 @@ VOID PlatformRegisterOptionsAndKeys(VOID)
+-  UINT16 OptionSimpleInit = PlatformRegisterFvBootOption(
++  mSimpleInitOptionNumber = PlatformRegisterFvBootOption(
+@@ -459 +468 @@ VOID PlatformRegisterOptionsAndKeys(VOID)
+-      NULL, (UINT16)OptionSimpleInit, 0, &UP, NULL);
++      NULL, mSimpleInitOptionNumber, 0, &UP, NULL);
+@@ -680,0 +690,38 @@ VOID EFIAPI PlatformBootManagerAfterConsole(VOID)
++#ifdef ENABLE_SIMPLE_INIT
++  // Product boot path: invoke the FV-resident SimpleInit app
++  // directly instead of relying on BootOrder, hotkeys or the generic BDS
++  // fallback chain.  If SimpleInit returns, retain the exact EFI status on
++  // screen rather than silently continuing into the embedded EFI Shell.
++  {
++    EFI_BOOT_MANAGER_LOAD_OPTION DirectSimpleInit;
++    CHAR16                       OptionName[sizeof("Boot####")];
++    UINT16                       OptionNumber;
++
++    OptionNumber = mSimpleInitOptionNumber;
++    if (OptionNumber == 0xFFFF) {
++      Print(L"\r\nM1892: SimpleInit option was not registered\r\n");
++      while (TRUE) {
++        gBS->Stall(1000 * 1000);
++      }
++    }
++    UnicodeSPrint(
++        OptionName, sizeof(OptionName), L"Boot%04x", OptionNumber);
++    Print(L"\r\nM1892: launching SimpleInit directly (%s)\r\n", OptionName);
++    Status = EfiBootManagerVariableToLoadOption(OptionName, &DirectSimpleInit);
++    if (EFI_ERROR(Status)) {
++      Print(L"M1892: load-option lookup failed: %r\r\n", Status);
++    }
++    else {
++      EfiBootManagerBoot(&DirectSimpleInit);
++      Print(
++          L"M1892: SimpleInit returned, boot status: %r\r\n",
++          DirectSimpleInit.Status);
++      EfiBootManagerFreeLoadOption(&DirectSimpleInit);
++    }
++    Print(L"M1892: boot hold; EFI Shell fallback is disabled\r\n");
++    while (TRUE) {
++      gBS->Stall(1000 * 1000);
++    }
++  }
++#endif
++

@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R57 read-only PM8998 RTC candidate.
+ *
+ * Keep the accepted R55/R56 hardware description.  The stock tree explicitly
+ * disallows RTC writes and alarm power-up.  Mainline already omits
+ * allow-set-time; qcom,no-alarm additionally prevents Linux from owning or
+ * programming the PMIC alarm.  Probe may only ensure that the RTC counter is
+ * enabled, then expose its current value.
+ */
+
+#include "sdm845-meizu-m1892-r55-cpufreq-no-lmh.dts"
+
+&pm8998_lsid0 {
+	rtc@6000 {
+		qcom,no-alarm;
+	};
+};

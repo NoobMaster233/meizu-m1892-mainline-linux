@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* R438: add the machine-to-CS35L41 speaker routes for fail-closed probing. */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/sound";
+		__overlay__ {
+			audio-routing =
+				"Left Spk", "Left SPK",
+				"Right Spk", "Right SPK",
+				"RX_BIAS", "MCLK",
+				/*
+				 * Qualcomm's downstream SDM845 machine driver keeps
+				 * the codec clock running while any analogue microphone
+				 * bias is active (MIC BIASn <- MCLK TX).  The upstream
+				 * WCD934x widget is named MCLK, so express the equivalent
+				 * dependency in the machine audio graph.
+				 */
+				"MIC BIAS1", "MCLK",
+				"MIC BIAS2", "MCLK",
+				"MIC BIAS3", "MCLK",
+				"AMIC1", "MIC BIAS1",
+				"AMIC2", "MIC BIAS2",
+				"AMIC3", "MIC BIAS3";
+		};
+	};
+};

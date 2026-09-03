@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+description="M1892 daily UFS runtime power policy"
+
+depend()
+{
+	need localmount
+	after bootmisc
+}
+
+start()
+{
+	ebegin "$description"
+	/usr/local/sbin/m1892-ufs-policy >/var/log/m1892-ufs-policy.log 2>&1
+	eend $?
+}
+
+stop()
+{
+	# Shutdown does not need to undo a kernel-supported runtime PM policy.
+	rm -f /run/m1892-ufs-policy.state
+}

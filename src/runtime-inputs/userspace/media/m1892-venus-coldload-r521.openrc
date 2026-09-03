@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+
+description="M1892 pinned Venus cold loader"
+
+depend()
+{
+	need localmount
+	after modules bootmisc
+	before display-manager
+}
+
+start()
+{
+	ebegin "$description"
+	/usr/local/sbin/m1892-venus-coldload-r521 \
+		>/var/log/m1892-venus-coldload-r521.log 2>&1
+	eend $?
+}
+
+stop()
+{
+	# A reboot owns teardown. Never unload or rebind Venus in a live boot.
+	return 0
+}

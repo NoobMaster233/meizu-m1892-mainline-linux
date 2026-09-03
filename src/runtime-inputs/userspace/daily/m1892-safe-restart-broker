@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+helper=/usr/local/sbin/m1892-safe-restart
+fail() { echo "M1892_SAFE_RESTART_BROKER_FAIL: $1" >&2; exit 1; }
+
+test "$(id -u)" = 0 || fail 'pkexec root required'
+caller_uid=${PKEXEC_UID:-}
+case $caller_uid in ''|*[!0-9]*) fail 'invalid caller uid' ;; esac
+test "$caller_uid" -ge 1000 && test "$caller_uid" -ne 65534 || fail 'unexpected caller'
+caller_record=$(getent passwd "$caller_uid" 2>/dev/null || true)
+test -n "$caller_record" || fail 'caller account is absent'
+caller_user=$(printf '%s\n' "$caller_record" | cut -d: -f1)
+test -x "$helper" || fail 'restart helper is absent'
+case $(stat -c '%u:%g:%a' "$helper") in 0:0:755|0:0:750|0:0:700) ;; *) fail 'restart helper permissions are unsafe' ;; esac
+
+session=
+for candidate in $(loginctl list-sessions --no-legend 2>/dev/null |
+	awk -v uid="$caller_uid" -v user="$caller_user" '$2 == uid && $3 == user { print $1 }'); do
+	test "$(loginctl show-session "$candidate" -p Active --value)" = yes || continue
+	test "$(loginctl show-session "$candidate" -p Remote --value)" = no || continue
+	test "$(loginctl show-session "$candidate" -p Seat --value)" = seat0 || continue
+	session=$candidate
+	break
+done
+test -n "$session" || fail 'active local seat0 session is absent'
+
+case ${1:-} in
+	check) "$helper" check; echo "M1892_SAFE_RESTART_BROKER_READY session=$session" ;;
+	restart) exec "$helper" restart ;;
+	*) echo "usage: $0 {check|restart}" >&2; exit 2 ;;
+esac

@@ -1,0 +1,26 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * R402: bind only the physically confirmed 0x0c SMB1355 to a deliberately
+ * read-only telemetry driver.  The driver has no write path and does not
+ * register a charger or interrupt controller.  Address 0x08 remains absent
+ * because R401 observed a NACK while attached to the PC.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/geniqup@ac0000/i2c@a88000";
+
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			smb1355_telemetry: charger@c {
+				compatible = "qcom,smb1355-telemetry";
+				reg = <0x0c>;
+				status = "okay";
+			};
+	};
+	};
+};

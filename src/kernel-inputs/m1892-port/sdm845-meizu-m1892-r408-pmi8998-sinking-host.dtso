@@ -1,0 +1,29 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * R408: bounded pass-through prerequisite on top of accepted R407.
+ *
+ * Keep the USB data role fixed to Host, but allow TCPM to perform a power-role
+ * swap from Source to Sink.  Both directions are capped at 5 V / 500 mA for
+ * the first physical gate.  No 9-V PDO, FRS, PPS or proprietary mCharge is
+ * advertised.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/spmi@c440000/pmic@2/typec@1300/connector";
+
+		__overlay__ {
+			power-role = "dual";
+			try-power-role = "source";
+			data-role = "host";
+
+			/* USB PD 2.0, specification version 1.3. */
+			pd-revision = /bits/ 8 <2 0 1 3>;
+
+			/* Fixed 5 V / 500 mA, USB communications capable. */
+			sink-pdos = <0x04019032>;
+		};
+	};
+};

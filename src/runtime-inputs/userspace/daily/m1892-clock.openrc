@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+description="Restore M1892 PMIC RTC offset at boot and save it at shutdown"
+
+depend()
+{
+	need localmount
+	before chronyd greetd
+}
+
+start()
+{
+	ebegin "$description"
+	/usr/local/sbin/m1892-clock restore >/var/log/m1892-clock.log 2>&1
+	eend $?
+}
+
+stop()
+{
+	ebegin "Saving M1892 PMIC RTC offset"
+	/usr/local/sbin/m1892-clock save >>/var/log/m1892-clock.log 2>&1
+	eend $?
+}

@@ -1,0 +1,115 @@
+diff --git a/src/cad-pulse.c b/src/cad-pulse.c
+index 6ea4ea6..73488dc 100644
+--- a/src/cad-pulse.c
++++ b/src/cad-pulse.c
+@@ -502,18 +502,18 @@ static void init_card_info(pa_context *ctx, const pa_card_info *info, int eol,
+ 
+     g_debug("CARD: idx=%u name='%s'", info->index, info->name);
+ 
+-    for (i = 0; i < info->n_profiles; i++) {
+-        pa_card_profile_info2 *profile = info->profiles2[i];
+-
+-        if (g_str_has_prefix(profile->name, SND_USE_CASE_VERB_VOICECALL)) {
++    self->has_voice_profile = FALSE;
++    self->audio_mode = CALL_AUDIO_MODE_DEFAULT;
++    for (i = 0; i < info->n_profiles; i++) {
++        pa_card_profile_info2 *profile = info->profiles2[i];
++
++        if (g_str_has_prefix(profile->name, SND_USE_CASE_VERB_VOICECALL))
+             self->has_voice_profile = TRUE;
+-            if (info->active_profile2 == profile)
+-                self->audio_mode = CALL_AUDIO_MODE_CALL;
+-            else
+-                self->audio_mode = CALL_AUDIO_MODE_DEFAULT;
+-            break;
+-        }
+     }
++    if (info->active_profile2 &&
++        g_str_has_prefix(info->active_profile2->name,
++                         SND_USE_CASE_VERB_VOICECALL))
++        self->audio_mode = CALL_AUDIO_MODE_CALL;
+ 
+     // We were able determine the current mode, set the corresponding D-Bus property
+     if (self->audio_mode != CALL_AUDIO_MODE_UNKNOWN)
+@@ -912,6 +912,62 @@ static void set_card_profile(pa_context *ctx, const pa_card_info *info, int eol,
+     }
+ }
+ 
++/*
++ * PulseAudio 17 expands one UCM verb into multiple profiles when the output
++ * devices share a PCM (for example "Voice Call (Earpiece, Mic)" and
++ * "Voice Call (Mic, Speaker)").  The historical callaudiod path tries to
++ * change an output port inside the active profile, but the Speaker port is
++ * not part of the Earpiece profile.  Select the matching split voice profile
++ * instead and let PulseAudio run the UCM device transition.
++ */
++static void set_speaker_profile(pa_context *ctx, const pa_card_info *info, int eol, void *data)
++{
++    CadPulseOperation *operation = data;
++    pa_card_profile_info2 *profile;
++    const char *target_profile = NULL;
++    uint32_t target_priority = 0;
++    pa_operation *op = NULL;
++
++    if (eol != 0)
++        return;
++
++    if (!info || info->index != operation->pulse->card_id)
++        goto complete;
++
++    for (int i = 0; i < info->n_profiles; i++) {
++        gboolean has_speaker;
++
++        profile = info->profiles2[i];
++        has_speaker = g_strstr_len(profile->name, -1, "Speaker") != NULL;
++
++        if (!profile->available ||
++            !g_str_has_prefix(profile->name, SND_USE_CASE_VERB_VOICECALL) ||
++            has_speaker != (gboolean)operation->value ||
++            profile->priority <= target_priority)
++            continue;
++
++        target_profile = profile->name;
++        target_priority = profile->priority;
++    }
++
++    if (target_profile &&
++        (!info->active_profile2 ||
++         g_strcmp0(info->active_profile2->name, target_profile) != 0)) {
++        g_debug("switching speaker state through split profile '%s'", target_profile);
++        op = pa_context_set_card_profile_by_index(ctx, operation->pulse->card_id,
++                                                  target_profile,
++                                                  operation_complete_cb, operation);
++    }
++
++    if (op) {
++        pa_operation_unref(op);
++        return;
++    }
++
++complete:
++    operation_complete_cb(ctx, target_profile != NULL, operation);
++}
++
+ static void set_output_port(pa_context *ctx, const pa_sink_info *info, int eol, void *data)
+ {
+     CadPulseOperation *operation = data;
+@@ -1077,9 +1132,15 @@ void cad_pulse_enable_speaker(gboolean enable, CadOperation *cad_op)
+     operation->op = cad_op;
+     operation->value = (guint)enable;
+ 
+-    op = pa_context_get_sink_info_by_index(operation->pulse->ctx,
+-                                           operation->pulse->sink_id,
+-                                           set_output_port, operation);
++    if (operation->pulse->has_voice_profile) {
++        op = pa_context_get_card_info_by_index(operation->pulse->ctx,
++                                               operation->pulse->card_id,
++                                               set_speaker_profile, operation);
++    } else {
++        op = pa_context_get_sink_info_by_index(operation->pulse->ctx,
++                                               operation->pulse->sink_id,
++                                               set_output_port, operation);
++    }
+     if (op)
+         pa_operation_unref(op);
+ 

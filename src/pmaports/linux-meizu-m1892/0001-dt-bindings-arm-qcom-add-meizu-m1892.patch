@@ -1,0 +1,24 @@
+From: Meizu 16th Plus mainline bring-up
+Subject: [PATCH] dt-bindings: arm: qcom: add Meizu 16th Plus
+
+Add the Meizu 16th Plus (M1892), an SDM845 handset, to the Qualcomm
+root-compatible list.  Without this entry the board DT compiles, but
+`CHECK_DTBS=y` rejects `meizu,m1892` at the root node.
+
+---
+ Documentation/devicetree/bindings/arm/qcom.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
+--- a/Documentation/devicetree/bindings/arm/qcom.yaml
++++ b/Documentation/devicetree/bindings/arm/qcom.yaml
+@@ -970,6 +970,7 @@ properties:
+               - lenovo,yoga-c630
+               - lg,judyln
+               - lg,judyp
++              - meizu,m1892
+               - oneplus,enchilada
+               - oneplus,fajita
+               - qcom,sdm845-mtp
+-- 
+2.43.0

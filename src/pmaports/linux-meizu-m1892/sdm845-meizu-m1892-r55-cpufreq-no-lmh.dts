@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R55 CPUFreq dependency candidate.
+ *
+ * Keep the accepted R54 battery/FG baseline.  The global deferred-probe worker
+ * remains blacklisted during bring-up, and both LMH platform devices therefore
+ * remain unbound.  Their interrupt-controller phandles make fw_devlink hold
+ * the otherwise firmware-programmed CPUFreq HW device indefinitely.
+ *
+ * The qcom-cpufreq-hw driver explicitly supports a platform with no optional
+ * LMH interrupt and continues normal frequency-table registration when
+ * platform_get_irq_optional() returns -ENXIO.  Remove only that optional link;
+ * do not enable or reconfigure LMH in this candidate.
+ */
+
+#include "sdm845-meizu-m1892-r54-battery-fg.dts"
+
+&cpufreq_hw {
+	/delete-property/ interrupts-extended;
+};

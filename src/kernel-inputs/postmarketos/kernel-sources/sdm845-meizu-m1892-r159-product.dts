@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Final product source; the R159 address is folded into the R86 product file. */
+
+/dts-v1/;
+
+#include "sdm845-meizu-m1892-r144-slpi-sensors.dts"

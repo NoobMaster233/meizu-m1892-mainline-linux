@@ -1,0 +1,43 @@
+diff --git a/src/lib/fdtparser.c b/src/lib/fdtparser.c
+index 5d56c16..7f32aa4 100644
+--- a/src/lib/fdtparser.c
++++ b/src/lib/fdtparser.c
+@@ -88,22 +88,30 @@ keyval**fdt_get_cmdline_items(fdt*fdt,size_t*length){
+ 	return param_s_parse_items(cmdline,(size_t)len,length);
+ }
+ 
+ bool fdt_get_initrd(fdt*fdt,void**initrd,size_t*size){
+ 	int node,l;
+ 	const void*data=NULL;
+-	UINTN start=0,end=0;
++	uint64_t start=0,end=0;
+ 	if(!fdt||!initrd||!size)return false;
+ 	node=fdt_path_offset(fdt,"/chosen");
+ 	if(node<0)return false;
+ 	data=fdt_getprop(fdt,node,"linux,initrd-start",&l);
+-	if(l!=sizeof(void*))return false;
+-	start=*(UINTN*)data;
++	if(!data)return false;
++	if(l==sizeof(fdt64_t))
++		start=fdt64_to_cpu(*(const fdt64_t*)data);
++	else if(l==sizeof(fdt32_t))
++		start=fdt32_to_cpu(*(const fdt32_t*)data);
++	else return false;
+ 	data=fdt_getprop(fdt,node,"linux,initrd-end",&l);
+-	if(l!=sizeof(void*))return false;
+-	end=*(UINTN*)data;
+-	if(start<=end)return false;
+-	*initrd=(void*)start;
++	if(!data)return false;
++	if(l==sizeof(fdt64_t))
++		end=fdt64_to_cpu(*(const fdt64_t*)data);
++	else if(l==sizeof(fdt32_t))
++		end=fdt32_to_cpu(*(const fdt32_t*)data);
++	else return false;
++	if(start>=end)return false;
++	*initrd=(void*)(UINTN)start;
+ 	*size=(size_t)(end-start);
+ 	return true;
+ }
+ 
+ #endif

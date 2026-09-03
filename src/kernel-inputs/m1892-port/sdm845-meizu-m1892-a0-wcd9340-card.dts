@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 A0.6b: connect the accepted Multimedia1 front end to WCD9340 AIF1
+ * playback and capture.  Both CS35L41 speaker amplifiers remain disabled.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/sound/qcom,q6afe.h>
+
+#include "sdm845-meizu-m1892-a0-minimal-card.dts"
+
+&wcd9340 {
+	/* Values measured from the stock M1892 downstream DT. */
+	qcom,mbhc-headset-vthreshold-microvolt = <2550000>;
+	qcom,mbhc-headphone-vthreshold-microvolt = <75000>;
+};
+
+&sound {
+	slim-dai-link {
+		link-name = "SLIM WCD Playback";
+
+		cpu {
+			sound-dai = <&q6afedai SLIMBUS_0_RX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&wcd9340 0>; /* AIF1_PB */
+		};
+	};
+
+	slimcap-dai-link {
+		link-name = "SLIM WCD Capture";
+
+		cpu {
+			sound-dai = <&q6afedai SLIMBUS_0_TX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&wcd9340 1>; /* AIF1_CAP */
+		};
+	};
+};

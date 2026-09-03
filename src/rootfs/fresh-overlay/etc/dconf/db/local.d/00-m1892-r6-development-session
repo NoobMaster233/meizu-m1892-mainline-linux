@@ -1,0 +1,18 @@
+# Developer-session policy. Screen blanking remains independent from the
+# explicit deep-sleep launcher, and blanking never opens a password prompt.
+[org/gnome/desktop/session]
+idle-delay=uint32 120
+
+[org/gnome/desktop/screensaver]
+lock-enabled=false
+lock-delay=uint32 0
+
+[org/gnome/desktop/lockdown]
+disable-lock-screen=true
+
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+
+[sm/puri/phosh/lockscreen]
+require-unlock=false

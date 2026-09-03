@@ -1,0 +1,111 @@
+#!/bin/sh
+set -eu
+
+rtc=/sys/class/rtc/rtc1
+state_dir=/var/cache/m1892-swclock-offset
+offset_file=$state_dir/offset-storage
+restore_marker=/run/m1892-clock-restore
+minimum_epoch=1735689600
+maximum_epoch=4102444800
+mode=${1:-}
+
+fail()
+{
+	echo "M1892_CLOCK_FAIL: $1" >&2
+	exit 1
+}
+
+valid_unsigned()
+{
+	case "$1" in ''|*[!0-9]*) return 1 ;; esac
+	return 0
+}
+
+read_rtc()
+{
+	test "$(cat "$rtc/name" 2>/dev/null)" = 'rtc-pm8xxx c440000.spmi:pmic@0:rtc@6000' ||
+		fail 'unexpected RTC provider'
+	value=$(cat "$rtc/since_epoch" 2>/dev/null || true)
+	valid_unsigned "$value" || fail 'invalid RTC epoch'
+	printf '%s\n' "$value"
+}
+
+valid_civil_epoch()
+{
+	valid_unsigned "$1" && test "$1" -ge "$minimum_epoch" && test "$1" -le "$maximum_epoch"
+}
+
+save_now()
+{
+	now=$(date -u +%s)
+	valid_civil_epoch "$now" || fail 'system clock is not trustworthy'
+	rtc_epoch=$(read_rtc)
+	offset=$((now - rtc_epoch))
+	test "$offset" -gt 0 || fail 'calculated offset is not positive'
+
+	old=$(cat "$offset_file" 2>/dev/null || true)
+	write=1
+	if valid_unsigned "$old"; then
+		delta=$((offset - old))
+		test "$delta" -ge 0 || delta=$((-delta))
+		test "$delta" -gt 2 || write=0
+	fi
+	if test "$write" -eq 1; then
+		install -d -m 0755 "$state_dir"
+		temporary=$state_dir/.offset-storage.$$
+		printf '%s\n' "$offset" >"$temporary"
+		chmod 0644 "$temporary"
+		mv -f "$temporary" "$offset_file"
+		sync
+	fi
+	echo "M1892_CLOCK_SAVE=pass rtc=$rtc_epoch system=$now offset=$offset write=$write"
+}
+
+restore_now()
+{
+	rtc_epoch=$(read_rtc)
+	offset=$(cat "$offset_file" 2>/dev/null || true)
+	if ! valid_unsigned "$offset"; then
+		printf '%s\n' implementation=pmos-offset action=unavailable rtc_epoch="$rtc_epoch" >"$restore_marker"
+		echo M1892_CLOCK_RESTORE=unavailable
+		return 0
+	fi
+	target=$((rtc_epoch + offset))
+	valid_civil_epoch "$target" || fail 'restored epoch outside civil bounds'
+	before=$(date -u +%s)
+	action=not-needed
+	if test "$before" -lt "$target"; then
+		date -u -s "@$target" >/dev/null
+		action=applied
+	fi
+	after=$(date -u +%s)
+	{
+		echo implementation=pmos-offset
+		echo "action=$action"
+		echo "before_epoch=$before"
+		echo "rtc_epoch=$rtc_epoch"
+		echo "offset=$offset"
+		echo "target_epoch=$target"
+		echo "after_epoch=$after"
+	} >"$restore_marker"
+	echo "M1892_CLOCK_RESTORE=$action before=$before target=$target after=$after"
+}
+
+case "$mode" in
+	restore)
+		restore_now
+		;;
+	save)
+		save_now
+		;;
+	monitor)
+		while :; do
+			save_now || true
+			sleep 300
+		done
+		;;
+	*)
+		echo "usage: $0 restore|save|monitor" >&2
+		exit 2
+		;;
+esac

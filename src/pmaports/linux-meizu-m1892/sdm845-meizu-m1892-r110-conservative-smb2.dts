@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * M1892 R110: conservative built-in PMI8998 SMB2 charging candidate.
+ *
+ * Preserve the exact accepted R103 audio/display DT chain.  Enable only the
+ * upstream PMI8998 SMB2 block; the two vendor SMB1355 fast-charge devices are
+ * not described by this mainline tree and therefore remain disabled.
+ *
+ * The first physical test is deliberately limited to 500 mA.  The paired
+ * qcom_smbx module must include the change that derives the hardware fast
+ * charge register from constant-charge-current-max-microamp instead of the
+ * former fixed 1.95 A value.
+ */
+
+/dts-v1/;
+
+#include "sdm845-meizu-m1892-a0-wcd9340-headphones.dts"
+
+&battery {
+	constant-charge-current-max-microamp = <500000>;
+	constant-charge-voltage-max-microvolt = <4400000>;
+};
+
+&pmi8998_charger {
+	monitored-battery = <&battery>;
+	status = "okay";
+};
+
+&pmi8998_fg {
+	power-supplies = <&pmi8998_charger>;
+};

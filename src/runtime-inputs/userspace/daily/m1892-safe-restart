@@ -1,0 +1,73 @@
+#!/bin/sh
+set -eu
+
+# Ordinary Linux restart ownership belongs to PID 1.  The
+# previous implementation killed selected services, froze the live root and
+# entered reboot(2) directly.  That bypassed OpenRC's complete shutdown
+# runlevel and left a hard-locked phone with an ext4 orphan-file checksum
+# failure after physical reset.  BusyBox init already provides the standard
+# ordered path: stop services, kill remaining processes, sync/remount storage
+# read-only, then restart the kernel.
+
+lock=/run/m1892-power-action.lock
+state_dir=/var/lib/m1892/power-actions
+
+fail()
+{
+	echo "M1892_SAFE_RESTART_FAIL: $1" >&2
+	exit 1
+}
+
+openrc_shutdown_ready()
+{
+	test "$(readlink -f /proc/1/exe)" = /usr/bin/busybox || return 1
+	grep -qx '::shutdown:/sbin/openrc shutdown' /etc/inittab || return 1
+	test -x /sbin/reboot || return 1
+	test -x /etc/init.d/killprocs || return 1
+	test -x /etc/init.d/mount-ro || return 1
+	test -x /etc/init.d/savecache || return 1
+	rc-update show shutdown 2>/dev/null | grep -Eq '^[[:space:]]*killprocs[[:space:]]*\|[[:space:]]*shutdown$' || return 1
+	rc-update show shutdown 2>/dev/null | grep -Eq '^[[:space:]]*mount-ro[[:space:]]*\|[[:space:]]*shutdown$' || return 1
+	rc-update show shutdown 2>/dev/null | grep -Eq '^[[:space:]]*savecache[[:space:]]*\|[[:space:]]*shutdown$' || return 1
+}
+
+case ${1:-} in check|restart) action=$1 ;; *) echo "usage: $0 {check|restart}" >&2; exit 2 ;; esac
+test "$(id -u)" = 0 || fail 'root required'
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' || fail 'wrong hardware'
+test "$(findmnt -n -o FSTYPE /)" = ext4 || fail 'root is not ext4'
+findmnt -n -o OPTIONS / | tr ',' '\n' | grep -qx rw || fail 'root is not writable'
+test "$(cat /sys/class/block/sda/device/state)" = running || fail 'UFS is not running'
+test "$(cat /sys/fs/ext4/sda19/errors_count)" = 0 || fail 'ext4 has recorded errors'
+openrc_shutdown_ready || fail 'standard OpenRC shutdown path is incomplete'
+
+if test "$action" = check; then
+	echo "M1892_SAFE_RESTART_READY strategy=openrc-shutdown-mount-ro image_gate=none fsfreeze=disabled"
+	exit 0
+fi
+
+mkdir "$lock" 2>/dev/null || fail 'another power action is active'
+trap 'rmdir "$lock" >/dev/null 2>&1 || true' EXIT HUP INT TERM
+install -d -m 0700 "$state_dir"
+
+{
+	echo action=safe-restart
+	echo implementation=pid1-orderly-restart
+	echo request_epoch="$(date +%s)"
+	echo image_identity=informational-only
+	echo boot_sha256="$(sha256sum /dev/disk/by-partlabel/boot | awk '{print $1}')"
+	echo recovery_sha256="$(sha256sum /dev/disk/by-partlabel/recovery | awk '{print $1}')"
+	echo strategy=openrc-shutdown-mount-ro
+	echo fsfreeze=disabled
+	echo storage_preflight=pass
+} >"$state_dir/safe-restart-last.log"
+sync -f "$state_dir/safe-restart-last.log" 2>/dev/null || sync
+
+# Do not use -f: the non-forced BusyBox applet signals PID 1, which executes
+# `/sbin/openrc shutdown` from inittab.  Its shutdown runlevel stops services,
+# kills remaining processes, syncs and remounts filesystems read-only before
+# PID 1 invokes the kernel restart.  If init does not consume the request, the
+# caller remains alive long enough to report a real failure instead of
+# silently falling back to a direct reboot syscall.
+/sbin/reboot
+sleep 30
+fail 'PID 1 did not complete the OpenRC restart request'

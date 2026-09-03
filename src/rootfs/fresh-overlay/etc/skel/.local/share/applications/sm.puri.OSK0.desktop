@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=On-screen keyboard
+Name[zh_CN]=屏幕键盘
+Comment=On-screen keyboard
+Comment[zh_CN]=屏幕键盘
+Exec=/usr/bin/phosh-osk-stevia --allow-replacement
+Categories=System;GNOME;Core;
+OnlyShowIn=GNOME;Phosh;
+Icon=input-keyboard-symbolic
+NoDisplay=true
+X-GNOME-Autostart-Phase=Panel
+X-GNOME-Provides=inputmethod
+X-GNOME-Autostart-Notify=true
+X-GNOME-AutoRestart=true
+X-Phosh-UsesFeedback=true

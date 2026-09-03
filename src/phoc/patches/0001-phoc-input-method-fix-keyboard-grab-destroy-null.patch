@@ -1,0 +1,31 @@
+From: M1892 mainline project <m1892-mainline@localhost>
+Subject: [PATCH] input-method-relay: do not dereference destroy signal data
+
+wlroots commit 102a6bd415d4 ("input-method: use `NULL` when emitting
+signals") changed the input-method-v2 destroy signals to carry NULL.  The
+keyboard grab itself is still reachable through the live input method until
+the destroy notification returns, but Phoc continued to interpret the signal
+data as the grab and crashed in handle_im_keyboard_grab_destroy().
+
+Use the live grab retained by the input method instead.  This preserves the
+existing modifier restoration while following the wlroots destroy-signal
+contract.
+---
+ src/input-method-relay.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/input-method-relay.c b/src/input-method-relay.c
+index 85bf7a7..9c10cc4 100644
+--- a/src/input-method-relay.c
++++ b/src/input-method-relay.c
+@@ -113,7 +113,10 @@ handle_im_keyboard_grab_destroy (struct wl_listener *listener, void *data)
+ {
+   PhocInputMethodRelay *relay =
+     wl_container_of (listener, relay, input_method_keyboard_grab_destroy);
+-  struct wlr_input_method_keyboard_grab_v2 *keyboard_grab = data;
++  /* wlroots destroy signals carry NULL. The input method keeps the grab
++   * alive until this notification returns. */
++  struct wlr_input_method_keyboard_grab_v2 *keyboard_grab =
++    relay->input_method->keyboard_grab;
+
+   wl_list_remove (&relay->input_method_keyboard_grab_destroy.link);

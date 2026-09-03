@@ -1,0 +1,31 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * M1892 R401 passive SMB1355-bus discovery.
+ *
+ * R400 is the exact 5-V / 1.95-A accepted base. Enable only the provider
+ * chain needed for stock QUPv3 SE10 at 0x00a88000. No I2C child is created,
+ * so neither SMB1355 can bind or receive a charger configuration write.
+ * The post-boot gate performs one read-only transfer to each stock address
+ * (0x08 and 0x0c) and then checks the existing SMB2/storage/desktop state.
+ */
+
+/ {
+	fragment@0 {
+		target-path = "/soc@0/dma-controller@a00000";
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@1 {
+		target-path = "/soc@0/geniqup@ac0000/i2c@a88000";
+
+		__overlay__ {
+			clock-frequency = <400000>;
+			status = "okay";
+		};
+	};
+};

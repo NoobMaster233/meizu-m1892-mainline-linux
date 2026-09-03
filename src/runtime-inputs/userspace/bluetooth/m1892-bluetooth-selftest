@@ -1,0 +1,55 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+mode=${1:-passive}
+seconds=${2:-10}
+state=/run/m1892-bluetooth-identity.state
+scan_log=/run/m1892-bluetooth-scan.log
+
+fail()
+{
+	echo "M1892_BLUETOOTH_TEST_FAIL: $1" >&2
+	exit 1
+}
+
+test "$(id -u)" = 0 || fail 'root required'
+/usr/local/sbin/m1892-bluetooth-identity >/dev/null
+test -r "$state" || fail 'identity evidence absent'
+address=$(sed -n 's/^address=//p' "$state" | head -1)
+printf '%s\n' "$address" |
+	grep -Eq '^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$' ||
+	fail 'factory address evidence invalid'
+btmgmt info | grep -Fqi "addr $address " || fail 'factory address absent'
+btmgmt config | grep -qx 'Unconfigured index list with 0 items' ||
+	fail 'controller unconfigured'
+hciconfig hci0 | grep -qw RAW && fail 'controller RAW'
+
+case $mode in
+	passive)
+		echo 'M1892_BLUETOOTH_PASSIVE configured=yes'
+		exit 0 ;;
+	scan) ;;
+	*) echo "usage: $0 [passive|scan [5-60]]" >&2; exit 2 ;;
+esac
+case $seconds in ''|*[!0-9]*) fail 'invalid scan duration' ;; esac
+test "$seconds" -ge 5 && test "$seconds" -le 60 || fail 'scan duration out of range'
+nmcli -t -f GENERAL.STATE device show wlan0 |
+	grep -Fq '100 (connected)' || fail 'Wi-Fi absent before scan'
+phoc=$(pgrep -o -x phoc 2>/dev/null || true)
+test -n "$phoc" || fail 'desktop session absent'
+uid=$(awk '/^Uid:/ {print $2; exit}' "/proc/$phoc/status")
+user=$(getent passwd "$uid" | cut -d: -f1)
+test -n "$user" || fail 'desktop user absent'
+su -s /bin/sh "$user" -c 'bluetoothctl power on' >/dev/null
+rm -f "$scan_log"
+su -s /bin/sh "$user" -c "bluetoothctl --timeout $seconds scan on" \
+	>"$scan_log" 2>&1 || true
+su -s /bin/sh "$user" -c 'bluetoothctl scan off' >/dev/null 2>&1 || true
+nmcli -t -f GENERAL.STATE device show wlan0 |
+	grep -Fq '100 (connected)' || fail 'Wi-Fi disconnected during scan'
+hciconfig hci0 | grep -E 'RX bytes:.*errors:0' >/dev/null || fail 'HCI RX error'
+hciconfig hci0 | grep -E 'TX bytes:.*errors:0' >/dev/null || fail 'HCI TX error'
+devices=$(grep -c 'NEW.*Device' "$scan_log" || true)
+test "$devices" -gt 0 || fail 'no device discovered'
+echo "M1892_BLUETOOTH_SCAN_PASS seconds=$seconds devices=$devices wifi=connected"

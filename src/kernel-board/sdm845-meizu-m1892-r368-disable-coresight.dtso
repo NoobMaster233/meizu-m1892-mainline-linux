@@ -1,0 +1,30 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * M1892 daily-device cleanup: the board does not expose or use CoreSight.
+ * Leaving these AMBA debug blocks enabled caused the historical deferred-probe
+ * walk to stop while touching the CPU7 ETM at 0x7740000.  Disable the complete
+ * trace topology so the normal driver-core deferred-probe lifecycle can be
+ * tested without probing unowned debug registers.
+ */
+
+/ {
+	fragment@0 { target-path = "/soc@0/stm@6002000"; __overlay__ { status = "disabled"; }; };
+	fragment@1 { target-path = "/soc@0/funnel@6041000"; __overlay__ { status = "disabled"; }; };
+	fragment@2 { target-path = "/soc@0/funnel@6043000"; __overlay__ { status = "disabled"; }; };
+	fragment@3 { target-path = "/soc@0/funnel@6045000"; __overlay__ { status = "disabled"; }; };
+	fragment@4 { target-path = "/soc@0/replicator@6046000"; __overlay__ { status = "disabled"; }; };
+	fragment@5 { target-path = "/soc@0/etf@6047000"; __overlay__ { status = "disabled"; }; };
+	fragment@6 { target-path = "/soc@0/etr@6048000"; __overlay__ { status = "disabled"; }; };
+	fragment@7 { target-path = "/soc@0/etm@7040000"; __overlay__ { status = "disabled"; }; };
+	fragment@8 { target-path = "/soc@0/etm@7140000"; __overlay__ { status = "disabled"; }; };
+	fragment@9 { target-path = "/soc@0/etm@7240000"; __overlay__ { status = "disabled"; }; };
+	fragment@10 { target-path = "/soc@0/etm@7340000"; __overlay__ { status = "disabled"; }; };
+	fragment@11 { target-path = "/soc@0/etm@7440000"; __overlay__ { status = "disabled"; }; };
+	fragment@12 { target-path = "/soc@0/etm@7540000"; __overlay__ { status = "disabled"; }; };
+	fragment@13 { target-path = "/soc@0/etm@7640000"; __overlay__ { status = "disabled"; }; };
+	fragment@14 { target-path = "/soc@0/etm@7740000"; __overlay__ { status = "disabled"; }; };
+	fragment@15 { target-path = "/soc@0/funnel@7800000"; __overlay__ { status = "disabled"; }; };
+	fragment@16 { target-path = "/soc@0/funnel@7810000"; __overlay__ { status = "disabled"; }; };
+};

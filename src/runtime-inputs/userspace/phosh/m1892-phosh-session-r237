@@ -1,0 +1,68 @@
+#!/bin/sh
+set -u
+
+# Preserve the bounded sensor gate, then supervise the complete Phosh
+# session. If Phosh exits unexpectedly, keeping this initial greetd session
+# alive avoids dropping the phone into the intentionally minimal Phrog greeter.
+marker=/run/m1892-sensors-ready
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}
+log=$state_dir/m1892-phosh-session.log
+attempt=0
+stopping=0
+child_pid=
+
+mkdir -p "$state_dir"
+
+while ! test -s "$marker" && test "$attempt" -lt 250; do
+	attempt=$((attempt + 1))
+	sleep 0.1
+done
+
+if test -s "$marker" && grep -qx 'iio_sensor_proxy=ready' "$marker"; then
+	sensor_status="M1892_PHOSH_SENSOR_READY attempts=$attempt"
+else
+	sensor_status="M1892_PHOSH_SENSOR_DEGRADED attempts=$attempt"
+fi
+printf '%s %s\n' "$(date -Iseconds)" "$sensor_status" >>"$log"
+
+stop_session()
+{
+	stopping=1
+	if test -n "$child_pid"; then
+		kill -TERM "$child_pid" 2>/dev/null || :
+	fi
+}
+trap stop_session HUP INT TERM
+
+short_failures=0
+while test "$stopping" -eq 0; do
+	started=$(date +%s)
+	printf '%s M1892_PHOSH_START short_failures=%s\n' \
+		"$(date -Iseconds)" "$short_failures" >>"$log"
+	/usr/bin/phosh-session >>"$log" 2>&1 &
+	child_pid=$!
+	wait "$child_pid"
+	status=$?
+	child_pid=
+	ended=$(date +%s)
+	runtime=$((ended - started))
+	printf '%s M1892_PHOSH_EXIT status=%s runtime_s=%s stopping=%s\n' \
+		"$(date -Iseconds)" "$status" "$runtime" "$stopping" >>"$log"
+
+	test "$stopping" -eq 0 || exit 0
+	if test "$runtime" -ge 60; then
+		short_failures=0
+	else
+		short_failures=$((short_failures + 1))
+	fi
+	if test "$short_failures" -ge 3; then
+		printf '%s M1892_PHOSH_RATE_LIMIT delay_s=30\n' \
+			"$(date -Iseconds)" >>"$log"
+		sleep 30
+		short_failures=0
+	else
+		sleep 2
+	fi
+done
+
+exit 0
