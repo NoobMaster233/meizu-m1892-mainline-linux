@@ -20,6 +20,13 @@ These checks cover the source manifest, privacy patterns, configuration policy,
 shell syntax, account states and partition geometry. They do not flash a phone
 or establish fresh-image hardware acceptance.
 
+Source checks require Linux/WSL, Git, Python 3, Bash, common GNU tools, util-linux
+`unshare` and systemd's `systemd-sysusers`. Account tests create test accounts only
+inside isolated user namespaces, so the host must permit unprivileged user
+namespaces. An `unprivileged-userns` failure indicates a host policy restriction;
+use this branch's GitHub Actions checks rather than changing the phone or globally
+disabling host security policy.
+
 - `src/debian/`: builders, systemd/desktop configuration, OEM setup, installer and patches.
 - `src/public-release/`: shared kernel, device tree, boot and runtime components with their licenses.
 - `SOURCE-MANIFEST.sha256`: hashes of this public source snapshot.

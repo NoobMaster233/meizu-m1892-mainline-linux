@@ -17,6 +17,11 @@ sh tools/check-source.sh
 上述检查验证发布内容清单、隐私模式、配置策略、shell 语法、账户状态及容量逻辑，
 不会刷写手机，不代表新镜像已经通过真机测试。
 
+源码检查需要 Linux/WSL、Git、Python 3、Bash、常用 GNU 工具、util-linux 的 `unshare`
+及 systemd 的 `systemd-sysusers`。账户测试只在隔离的用户命名空间中创建测试账户，
+要求宿主允许非特权 user namespace。若出现 `unprivileged-userns`，属于宿主权限
+限制；可使用本分支的 GitHub Actions 源码检查，无需修改手机或全局关闭主机安全策略。
+
 源码布局：
 
 - `src/debian/`：Debian 构建脚本、systemd/桌面配置、OEM 初始化、安装器和补丁；
