@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 set -eu
+export PYTHONDONTWRITEBYTECODE=1
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 python3 "$root/tools/verify-source.py" "$root"
 python3 "$root/tools/test-source-privacy.py"

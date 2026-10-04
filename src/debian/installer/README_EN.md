@@ -2,9 +2,12 @@
 
 [简体中文](README.md)
 
-> When viewed in the GitHub source directory, this is the documentation template
-> for a complete local bundle. The source directory contains no images and cannot
-> be flashed directly. Check the repository home page and installation status first.
+> This template applies only to local bundles whose `manifest.json` has
+> `scope: owner-local-complete`. For a `public-device-firmware` bundle, use the
+> [public installation guide](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/blob/codex/debian13-plasma-mobile/PACKAGE_INSTALL_EN.md),
+> not the local Recovery commands below. Both formats share installer source,
+> but use different firmware sources and Recovery assets. This source directory
+> does not contain flashable images.
 
 **Owner-local complete package, not a redistributable public Release.** It includes model-level
 firmware extracted from the owner's official Flyme archive, but no owner account, Wi-Fi profile,

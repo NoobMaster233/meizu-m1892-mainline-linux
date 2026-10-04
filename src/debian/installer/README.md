@@ -2,8 +2,10 @@
 
 [English](README_EN.md)
 
-> 在 GitHub 源码目录阅读时：这是完整本地安装包所用的说明模板；当前源码目录
-> 不含镜像，不能直接刷机。请先查看仓库首页和安装说明确认是否已有匹配的可用包。
+> 本说明仅用于 `manifest.json` 中 `scope` 为 `owner-local-complete` 的本地包。
+> `public-device-firmware` 公开包请使用[公开安装手册](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/blob/codex/debian13-plasma-mobile/PACKAGE_INSTALL.md)，
+> 不要使用下方本地包的 Recovery 恢复命令。两种包共用安装器源码，但固件来源和
+> Recovery 资产不同；源码目录本身不含可刷镜像。
 
 **这是机主本地完整包，不是允许公开再分发的 Release。** 包含从机主官方 Flyme 包
 提取的机型固件，不包含机主账户、Wi-Fi、SSH key、设备唯一校准或游戏。

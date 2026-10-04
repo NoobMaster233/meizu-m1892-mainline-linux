@@ -6,6 +6,11 @@ This Debian branch currently provides source, not a validated current installati
 bundle for ordinary users. Keep your bootable system. Source ZIPs are not flashing
 ZIPs, and a postmarketOS Release Boot image is not a Debian installation input.
 
+Once a matching complete release is available, follow the [installation guide](PACKAGE_INSTALL_EN.md):
+back up → download and verify → enter Fastboot → run the installer → create your account.
+You do not need to enter the source directories or compile anything. Read the
+[backup and rollback preparation](BACKUP_EN.md) before starting.
+
 A full installation requires an unlocked M1892 and erases userdata. Bootloader
 unlocking is outside this project. Keep offline copies of stock boot/recovery and
 unique device data. GPT, ABL, modem/NV, persist, proinfo and calibration partitions
