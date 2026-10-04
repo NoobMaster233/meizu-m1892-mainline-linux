@@ -2,9 +2,10 @@
 
 **简体中文** | [English](README_EN.md)
 
-另有 [Debian 13 + Plasma Mobile 源码分支](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/tree/codex/debian13-plasma-mobile)。
-该分支目前只有源码预览，尚无最新全新安装验收通过的 Debian 刷机包；下文的
-安装说明与 Release 属于 postmarketOS，请勿跨产品线混用镜像。
+另有 [Debian 13 + Plasma Mobile 分支](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/tree/codex/debian13-plasma-mobile)：
+[完整安装预发布包](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/releases/tag/debian13-2026.10-preview.1) | [中文安装手册](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/blob/codex/debian13-plasma-mobile/PACKAGE_INSTALL.md)。
+该包已通过离线检查，尚未完成真机全新安装验收，仅供有备份与恢复能力的用户测试。
+下文的安装说明与 Release 属于 postmarketOS，请勿跨产品线混用镜像。
 
 这是面向魅族 16th Plus（`M1892`，骁龙 845）的实验性
 postmarketOS/Phosh 与主线 Linux 移植，当前内核为 Linux 7.1-rc1。

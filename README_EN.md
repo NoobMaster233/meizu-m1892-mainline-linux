@@ -2,10 +2,11 @@
 
 [简体中文](README.md) | **English**
 
-A separate [Debian 13 + Plasma Mobile source branch](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/tree/codex/debian13-plasma-mobile)
-is available as a source preview, without a current fresh-install-validated Debian
-bundle. Installation instructions and Releases below are for postmarketOS; do not
-mix images between the two product lines.
+A separate [Debian 13 + Plasma Mobile branch](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/tree/codex/debian13-plasma-mobile)
+provides a [complete installation prerelease](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/releases/tag/debian13-2026.10-preview.1)
+and an [installation guide](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/blob/codex/debian13-plasma-mobile/PACKAGE_INSTALL_EN.md).
+Offline checks passed; fresh installation on hardware is still unverified. It is for testing by users
+with backups and a recovery path. Instructions and Releases below are for postmarketOS; do not mix images.
 
 Experimental postmarketOS/Phosh and mainline-Linux port for the Meizu 16th
 Plus (`M1892`, Snapdragon 845), currently using Linux 7.1-rc1.
