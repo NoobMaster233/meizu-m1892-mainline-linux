@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=M1892 Stage 3 session acceptance
+NoDisplay=true
+OnlyShowIn=KDE;
+Exec=/usr/libexec/m1892/stage3-session-acceptance
+X-KDE-autostart-phase=2

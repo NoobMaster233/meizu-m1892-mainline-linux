@@ -1,0 +1,6 @@
+rootfs_id=m1892-debian13-stage2-ram
+distribution=debian
+version=13
+architecture=arm64
+root_mode=ram-loopback
+development_console=acm

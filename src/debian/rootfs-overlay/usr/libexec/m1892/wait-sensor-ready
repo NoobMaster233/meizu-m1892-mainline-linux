@@ -1,0 +1,54 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail() { echo "M1892_SENSOR_READY_FAIL: $*" >&2; exit 1; }
+[ "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = "Meizu 16th Plus (M1892)" ] ||
+	fail wrong-hardware
+command -v ssccli >/dev/null || fail ssccli-absent
+
+tmp=$(mktemp /run/m1892-sensor-ready.XXXXXX)
+probe=
+cleanup()
+{
+	[ -z "$probe" ] || kill "$probe" 2>/dev/null || true
+	[ -z "$probe" ] || wait "$probe" 2>/dev/null || true
+	rm -f "$tmp"
+}
+trap cleanup EXIT HUP INT TERM
+
+attempt=0
+# SLPI/SSC may finish provider discovery after the desktop's ordinary cold-boot
+# window, especially after an offline filesystem repair.  Keep every probe
+# independently bounded, but allow the standard systemd dependency to wait for
+# one real sample instead of permanently losing rotation after an early miss.
+while [ "$attempt" -lt 20 ]; do
+	attempt=$((attempt + 1))
+	: >"$tmp"
+	# ssccli's own timeout has occasionally failed to terminate the process.
+	# Keep an independent process-level bound so one probe cannot consume the
+	# entire systemd startup budget.
+	timeout -k 1 3 ssccli --sensor accelerometer --timeout 2 >"$tmp" 2>&1 &
+	probe=$!
+	poll=0
+	while kill -0 "$probe" 2>/dev/null && [ "$poll" -lt 20 ]; do
+		if grep -q 'Accelerometer sensor measurement:' "$tmp"; then
+			kill "$probe" 2>/dev/null || true
+			wait "$probe" 2>/dev/null || true
+			probe=
+			echo "M1892_SENSOR_READY_PASS attempt=$attempt poll_deciseconds=$poll"
+			exit 0
+		fi
+		poll=$((poll + 1))
+		sleep 0.1
+	done
+	wait "$probe" 2>/dev/null || true
+	probe=
+	grep -q 'Accelerometer sensor measurement:' "$tmp" && {
+		echo "M1892_SENSOR_READY_PASS attempt=$attempt poll_deciseconds=$poll"
+		exit 0
+	}
+	sleep 0.1
+done
+tail -n 20 "$tmp" >&2 || true
+fail no-accelerometer-sample

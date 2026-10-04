@@ -1,0 +1,3 @@
+[sm.puri.phosh]
+# Keep the product default limited to launchers that the image installs.
+favorites=['org.gnome.Calls.desktop', 'sm.puri.Chatty.desktop', 'firefox-esr.desktop']

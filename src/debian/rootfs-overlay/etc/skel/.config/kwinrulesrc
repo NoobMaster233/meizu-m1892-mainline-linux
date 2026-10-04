@@ -1,0 +1,12 @@
+[1]
+Description=Force Gamescope gaming session fullscreen
+fullscreen=true
+fullscreenrule=3
+types=1
+wmclass=gamescope
+wmclasscomplete=false
+wmclassmatch=1
+
+[General]
+count=1
+rules=1

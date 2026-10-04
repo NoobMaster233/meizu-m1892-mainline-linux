@@ -1,0 +1,125 @@
+From: M1892 Mainline Maintainers <m1892@example.invalid>
+Subject: [PATCH] gpu-fdinfo: align MSM DPU fdinfo and devfreq metrics
+
+The platform driver is named msm_dpu while DRM fdinfo correctly reports the
+DRM driver name msm.  Treat those as the same device, consume the generic DRM
+engine and resident-memory keys, use the existing MSM GPU thermal hwmon path,
+and expose the standard devfreq current frequency in MHz.
+
+---
+ src/gpu_fdinfo.cpp | 37 +++++++++++++++++++++++++++++++++----
+ src/gpu_fdinfo.h   |  8 ++++++--
+ 2 files changed, 39 insertions(+), 6 deletions(-)
+
+diff --git a/src/gpu_fdinfo.cpp b/src/gpu_fdinfo.cpp
+index 944ad8f..85f6d3d 100644
+--- a/src/gpu_fdinfo.cpp
++++ b/src/gpu_fdinfo.cpp
+@@ -42,7 +42,10 @@ void GPU_fdinfo::find_fd()
+                 client_id = val;
+         }
+ 
+-        if (!driver.empty() && driver == module) {
++        const bool driver_matches =
++            driver == module || (module == "msm_dpu" && driver == "msm");
++
++        if (!driver.empty() && driver_matches) {
+             total++;
+             SPDLOG_TRACE(
+                 "driver = \"{}\", pdev = \"{}\", "
+@@ -54,7 +57,7 @@ void GPU_fdinfo::find_fd()
+ 
+         if (
+             driver.empty() || client_id.empty() ||
+-            driver != module || pdev != pci_dev ||
++            !driver_matches || pdev != pci_dev ||
+             client_ids.find(client_id) != client_ids.end()
+         )
+             continue;
+@@ -175,7 +178,7 @@ void GPU_fdinfo::find_hwmon_sensors()
+ {
+     std::string hwmon;
+ 
+-    if (module == "msm")
++    if (module == "msm_dpu" || module == "msm_drm")
+         hwmon = find_hwmon_sensor_dir("gpu");
+     else if (module == "panfrost" || module == "panthor")
+         hwmon = find_hwmon_sensor_dir("gpu_thermal");
+@@ -224,6 +227,29 @@ std::string GPU_fdinfo::find_hwmon_sensor_dir(std::string name) {
+     return "";
+ }
+ 
++void GPU_fdinfo::find_msm_gpu_devfreq()
++{
++    const fs::path devfreq_root("/sys/class/devfreq");
++
++    if (!fs::exists(devfreq_root))
++        return;
++
++    for (const auto& entry : fs::directory_iterator(devfreq_root)) {
++        const auto name = entry.path().filename().string();
++
++        if (name.find(".gpu") == std::string::npos && name != "gpu")
++            continue;
++
++        const auto cur_freq = entry.path() / "cur_freq";
++        gpu_clock_stream.open(cur_freq.string());
++        if (gpu_clock_stream.good()) {
++            SPDLOG_DEBUG("MSM devfreq clock found at {}", cur_freq.string());
++            return;
++        }
++        gpu_clock_stream.clear();
++    }
++}
++
+ void GPU_fdinfo::get_current_hwmon_readings()
+ {
+     for (auto& hs : hwmon_sensors) {
+@@ -551,7 +577,11 @@ int GPU_fdinfo::get_gpu_clock()
+     if (clock_str.empty())
+         return 0;
+ 
+-    return std::stoi(clock_str);
++    const auto clock = std::stoull(clock_str);
++    if (module == "msm_dpu" || module == "msm_drm")
++        return std::lround(static_cast<double>(clock) / 1'000'000.0);
++
++    return clock;
+ }
+ 
+ int GPU_fdinfo::get_gpu_clock_mali() {
+diff --git a/src/gpu_fdinfo.h b/src/gpu_fdinfo.h
+index c37672a..d59c60d 100644
+--- a/src/gpu_fdinfo.h
++++ b/src/gpu_fdinfo.h
+@@ -72,6 +72,7 @@ private:
+     std::ifstream gpu_clock_stream;
+     void find_i915_gt_dir();
+     void find_xe_gt_dir();
++    void find_msm_gpu_devfreq();
+     int get_gpu_clock();
+ 
+     uint64_t get_gpu_time_panfrost();
+@@ -141,8 +142,8 @@ public:
+             drm_engine_type = "drm-engine-gfx";
+             drm_memory_type = "drm-memory-vram";
+         } else if (module == "msm_dpu") {
+-            // msm driver does not report vram usage
+             drm_engine_type = "drm-engine-gpu";
++            drm_memory_type = "drm-resident-memory";
+         } else if (module == "msm_drm") {
+             init_kgsl();
+         } else if (module == "panfrost") {
+@@ -206,6 +207,9 @@ public:
+         if (module == "i915")
+             find_i915_gt_dir();
+         else if (module == "xe")
+             find_xe_gt_dir();
++        else if (module == "msm_dpu" || module == "msm_drm")
++            find_msm_gpu_devfreq();
++
+ 
+         thread = std::thread(&GPU_fdinfo::main_thread, this);
+         // "mangohud-gpufdinfo" wouldn't fit in the 15 byte limit
+-- 
+2.47.2

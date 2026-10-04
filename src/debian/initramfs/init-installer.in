@@ -1,0 +1,119 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: MIT
+# Explicit headless RAM installer. Never mounts or writes userdata itself.
+set -u
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export PATH
+/bin/busybox --install -s /bin
+archive=/run/m1892-installer-rootfs.ext4.gz
+image=/run/m1892-installer-rootfs.ext4
+newroot=/newroot
+expected_bytes=@ARCHIVE_BYTES@
+expected_sha=@ARCHIVE_SHA@
+expected_image_bytes=@IMAGE_BYTES@
+expected_image_sha=@IMAGE_SHA@
+mkdir -p /dev /proc /sys /run /tmp "$newroot" /sys/kernel/config
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+mount -t tmpfs -o mode=0755,nodev,nosuid,size=1024m tmpfs /run
+mount -t tmpfs -o mode=1777,nodev,nosuid tmpfs /tmp
+mount -t configfs configfs /sys/kernel/config
+printf 'mode=m1892-installer-initramfs\nrootfs_sha256=%s\n' "$expected_sha" >/run/m1892-installer-boot-identity
+log() { echo "m1892-installer: $*" >/dev/kmsg; echo "m1892-installer: $*" >/dev/console; }
+probe()
+{
+	[ -e "/sys/bus/platform/devices/$1" ] || return 1
+	[ ! -L "/sys/bus/platform/devices/$1/driver" ] || return 0
+	echo "$1" >/sys/bus/platform/drivers_probe 2>/dev/null || true
+	[ -L "/sys/bus/platform/devices/$1/driver" ]
+}
+bind()
+{
+	[ -e "/sys/bus/platform/devices/$1" ] || return 1
+	[ ! -L "/sys/bus/platform/devices/$1/driver" ] || return 0
+	echo "$1" >"/sys/bus/platform/drivers/$2/bind" 2>/dev/null || true
+	[ -L "/sys/bus/platform/devices/$1/driver" ]
+}
+# Same accepted UFS/USB provider ordering as the Debian recovery harness.
+probe 100000.clock-controller || true
+probe 179c0000.rsc:clock-controller || true
+bind 179c0000.rsc:regulators-0 qcom-rpmh-regulator || true
+sleep 1
+probe 784000.qfprom || true
+bind 88e2000.phy qcom-qusb2-phy || true
+sleep 1
+probe a6f8800.usb || true
+sleep 1
+bind 1d87000.phy qcom-qmp-ufs-phy || true
+sleep 1
+bind 1d84000.ufshc ufshcd-qcom || true
+echo /bin/mdev >/proc/sys/kernel/hotplug
+mdev -s
+gadget=/sys/kernel/config/usb_gadget/m1892
+mkdir -p "$gadget/strings/0x409" "$gadget/configs/c.1/strings/0x409"
+echo 0x1d6b >"$gadget/idVendor"
+echo 0x0104 >"$gadget/idProduct"
+echo 0xef >"$gadget/bDeviceClass"
+echo 0x02 >"$gadget/bDeviceSubClass"
+echo 0x01 >"$gadget/bDeviceProtocol"
+echo M1892INSTALLER >"$gadget/strings/0x409/serialnumber"
+echo 'M1892 Linux' >"$gadget/strings/0x409/manufacturer"
+echo 'M1892 RAM installer' >"$gadget/strings/0x409/product"
+echo 'RAM installation ACM and NCM' >"$gadget/configs/c.1/strings/0x409/configuration"
+echo 250 >"$gadget/configs/c.1/MaxPower"
+mkdir "$gadget/functions/ncm.usb0" "$gadget/functions/acm.usb0"
+echo 02:00:00:45:18:92 >"$gadget/functions/ncm.usb0/dev_addr"
+echo 02:00:00:45:18:93 >"$gadget/functions/ncm.usb0/host_addr"
+ln -s "$gadget/functions/ncm.usb0" "$gadget/configs/c.1/"
+ln -s "$gadget/functions/acm.usb0" "$gadget/configs/c.1/"
+udc=
+for candidate in /sys/class/udc/*; do [ -e "$candidate" ] || continue; udc=${candidate##*/}; break; done
+if [ -n "$udc" ]; then
+	echo "$udc" >"$gadget/UDC"
+	for interface in usb0 ncm0; do
+		[ -e "/sys/class/net/$interface" ] || continue
+		ifconfig "$interface" 169.254.45.1 netmask 255.255.0.0 up
+		break
+	done
+	log "USB ready UDC=$udc"
+else
+	log 'USB unavailable: UDC=none'
+fi
+rescue()
+{
+	terminal=$1 child=
+	trap '[ -z "$child" ] || kill -HUP "$child" 2>/dev/null; exit 0' TERM INT HUP
+	while [ ! -c "$terminal" ]; do sleep 1; done
+	while :; do
+		setsid sh -c "exec sh -l <'$terminal' >'$terminal' 2>&1" &
+		child=$!; wait "$child" 2>/dev/null || true; child=; sleep 1
+	done
+}
+rescue /dev/ttyMSM0 & serial_msm=$!
+rescue /dev/ttyGS0 & serial_usb=$!
+log 'Waiting for the declared RAM rootfs; persistent storage is not mounted'
+for attempt in $(seq 1 600); do
+	[ -f "$archive.ready" ] && [ -f "$archive" ] && break
+	sleep 1
+done
+if [ -f "$archive.ready" ] && [ "$(stat -c %s "$archive")" = "$expected_bytes" ] &&
+	[ "$(sha256sum "$archive" | awk '{print $1}')" = "$expected_sha" ]; then
+	if gzip -dc "$archive" >"$image" && [ "$(stat -c %s "$image")" = "$expected_image_bytes" ] &&
+		[ "$(sha256sum "$image" | awk '{print $1}')" = "$expected_image_sha" ]; then
+		rm -f "$archive" "$archive.ready"
+		if mount -t ext4 -o loop,rw,noatime "$image" "$newroot" &&
+			grep -Fxq 'rootfs_id=m1892-debian13-installer-ram' "$newroot/etc/m1892-rootfs-identity"; then
+			for device in null zero full random urandom tty; do chmod 0666 "/dev/$device"; done
+			kill "$serial_msm" "$serial_usb" 2>/dev/null || true
+			wait "$serial_msm" "$serial_usb" 2>/dev/null || true
+			mount -o move /proc "$newroot/proc"
+			mount -o move /sys "$newroot/sys"
+			mount -o move /dev "$newroot/dev"
+			mount -o move /run "$newroot/run"
+			exec switch_root -c /dev/console "$newroot" /sbin/init
+		fi
+	fi
+fi
+log 'Fail-closed RAM rescue hold; userdata and other persistent partitions were not written'
+while :; do sleep 3600; done

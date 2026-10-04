@@ -1,0 +1,92 @@
+# Contributor: Rasmus Thomsen <oss@cogitri.dev>
+# Contributor: Pablo Correa Gomez <pabloyoyoista@postmarketos.org>
+# M1892 downstream: retain the Alpine package and add one upstreamable display-panel guard.
+maintainer="team/gnome <achill@achill.org>"
+pkgname=gnome-control-center
+pkgver=50.4
+pkgrel=1
+pkgdesc="GNOME control center"
+url="https://gitlab.gnome.org/GNOME/gnome-control-center"
+arch="all"
+license="GPL-2.0-or-later"
+depends="
+	accountsservice
+	colord
+	cups-pk-helper
+	dbus:org.freedesktop.Secrets
+	malcontent
+	openrc-settingsd
+	setxkbmap
+	"
+makedepends="
+	accountsservice-dev
+	blueprint-compiler
+	cairo-dev
+	colord-dev
+	colord-gtk-dev
+	cups-dev
+	docbook-xml
+	docbook-xsl
+	gcr4-dev
+	glib-dev
+	gmobile-dev
+	gnome-bluetooth-dev
+	gnome-desktop-dev
+	gnome-online-accounts-dev
+	gnome-settings-daemon-dev
+	gsettings-desktop-schemas-dev
+	gsound-dev
+	ibus-dev
+	itstool
+	krb5-dev
+	libadwaita-dev
+	libgtop-dev
+	libgudev-dev
+	libnma-dev
+	libpwquality-dev
+	libsecret-dev
+	libwacom-dev
+	libxml2-utils
+	libxslt
+	malcontent-dev
+	meson
+	modemmanager-dev
+	networkmanager-dev
+	polkit-dev
+	pulseaudio-dev
+	samba-dev
+	tecla-dev
+	udisks2-dev
+	upower-dev
+	"
+options="!check" # needs unpackaged py-dbusmock
+install="$pkgname.pre-install $pkgname.pre-upgrade"
+subpackages="$pkgname-dbg $pkgname-dev $pkgname-lang $pkgname-doc $pkgname-bash-completion"
+source="https://download.gnome.org/sources/gnome-control-center/${pkgver%%.*}/gnome-control-center-$pkgver.tar.xz
+	README.alpine
+	0001-display-ignore-stale-widget-notify-without-output.patch
+	"
+
+build() {
+	abuild-meson \
+		-Db_lto=true \
+		-Dibus=true \
+		-Dlocation-services=enabled \
+		-Dmalcontent=true \
+		. output
+	meson compile -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+	mkdir -p "$pkgdir"/usr/lib/pkgconfig
+	mv "$pkgdir"/usr/share/pkgconfig/* "$pkgdir"/usr/lib/pkgconfig
+	rmdir "$pkgdir"/usr/share/pkgconfig
+	install -Dm0644 "$srcdir"/README.alpine -t "$pkgdir"/usr/share/doc/"$pkgname"
+}
+
+sha512sums="
+60e4bc9e6b31edf2765f786bcbd49bed683f21960f48eeb6bb87c44602fb7ae32d85b7d930e8cdcfcd8d0eb5a9c5a1d0c08e0a8ddd213f8c5a4c8d29c3359c95  gnome-control-center-50.4.tar.xz
+350aa443149c71851ad4de0976c7fc5cb626ba0c57a8d41e6ef80da1c65ed84a4dfa2483ae92630a3b611c4bfa9360ded82b55e8cd0e3907294c025e4f6b1671  README.alpine
+ff1e697f8cf4f74109d496b17b25aa8b189c601236c2c9494178b8ec781c22e7a8de5fcd47467549ee5dba5dc769088acd00609d30fe88c5b75d63be17cdcb60  0001-display-ignore-stale-widget-notify-without-output.patch
+"

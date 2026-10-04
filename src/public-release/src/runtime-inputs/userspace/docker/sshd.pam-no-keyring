@@ -1,0 +1,18 @@
+#%PAM-1.0
+
+# Keep the distribution authentication/account stacks.  SSH sessions are
+# non-graphical, so do not run pam_gnome_keyring here: on Alpine's global
+# base-session that module leaves one orphaned daemon after every key-only
+# root SSH connection.
+auth      include   base-auth
+account   include   base-account
+password  include   base-password
+
+session   include   base-session-noninteractive
+-session  optional  pam_rundir.so
+-session  optional  pam_elogind.so
+-session  optional  pam_systemd.so
+-session  optional  pam_ck_connector.so
+-session  optional  pam_turnstile.so
+-session  optional  pam_dumb_runtime_dir.so
+-session  optional  pam_openrc.so

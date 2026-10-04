@@ -1,0 +1,52 @@
+diff --git a/.flatpak-manifest.yml b/.flatpak-manifest.yml
+index 6ee3294..0582809 100644
+--- a/.flatpak-manifest.yml
++++ b/.flatpak-manifest.yml
+@@ -27,9 +27,31 @@ cleanup:
+   - /man
+   - /share/man
+   - /share/gtk-doc
++  - /share/icons/hicolor/scalable
+ 
+ modules:
+ 
++  - name: ffmpeg-m1892
++    buildsystem: simple
++    build-commands:
++      - >-
++        ./configure --prefix=/app --libdir=/app/lib
++        --disable-static --enable-shared --disable-programs --disable-doc
++        --disable-debug --enable-pic --enable-gpl --enable-gnutls
++        --enable-libv4l2
++      - make -j${FLATPAK_BUILDER_N_JOBS}
++      - make install
++    sources:
++      - type: archive
++        url: https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.3.tar.gz
++        sha256: e0b04c4b43d7e6d67cb6710334fb513adf13ac860532f30e1d0ac4c231f232fb
++      - type: patch
++        path: m1892-patches/ffmpeg-7.1-v4l2m2m-decoder-framerate.patch
++      - type: patch
++        path: m1892-patches/ffmpeg-7.1-v4l2m2m-drm-prime.patch
++    cleanup:
++      - /share/ffmpeg
++
+   - name: libmpv
+     buildsystem: meson
+     config-opts:
+@@ -49,6 +71,8 @@ modules:
+           project-id: 5348
+           stable-only: true
+           url-template: https://github.com/mpv-player/mpv/archive/v$version.tar.gz
++      - type: patch
++        path: m1892-patches/mpv-0.41-propagate-container-framerate.patch
+     modules:
+ 
+       - name: libXpresent
+@@ -167,3 +191,5 @@ modules:
+     sources:
+       - type: dir
+         path: '.'
++      - type: patch
++        path: m1892-patches/wiliwili-1.6-libmpv-present-timing.patch
+

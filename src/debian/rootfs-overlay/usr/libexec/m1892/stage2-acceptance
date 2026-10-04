@@ -1,0 +1,64 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail()
+{
+	message="M1892_DEBIAN_STAGE2_RUNTIME_FAIL: $*"
+	printf '%s\n' "$message" >/dev/console 2>/dev/null || true
+	printf '%s\n' "$message" >/dev/kmsg 2>/dev/null || true
+	exit 1
+}
+
+[ "$(cat /proc/1/comm 2>/dev/null)" = systemd ] || fail pid1-not-systemd
+grep -Fxq 'ID=debian' /etc/os-release || fail wrong-os
+grep -Eq '^VERSION_ID="?13"?$' /etc/os-release || fail wrong-version
+grep -Fxq 'rootfs_id=m1892-debian13-stage2-ram' \
+	/etc/m1892-rootfs-identity || fail wrong-rootfs-identity
+grep -Eq '^/dev/loop[0-9]+ / ext4 ' /proc/mounts || fail root-not-loopback-ext4
+if awk '$1 ~ "^/dev/(sd|mmcblk|nvme|mapper)" { found=1 }
+	END { exit found ? 0 : 1 }' /proc/mounts; then
+	fail persistent-block-filesystem-mounted
+fi
+
+model=$(tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true)
+[ "$model" = 'Meizu 16th Plus (M1892)' ] || fail "wrong-device:$model"
+[ -b /dev/sda19 ] || fail userdata-node-absent
+grep -qx 'PARTNAME=userdata' /sys/class/block/sda19/uevent || \
+	fail userdata-identity-mismatch
+[ -e /sys/class/drm/card0 ] || fail drm-card0-absent
+[ -e /dev/dri/renderD128 ] || fail fd630-render-node-absent
+[ -c /dev/ttyGS0 ] || fail acm-console-absent
+for root_owned in /etc /usr /usr/lib /var /var/lib /var/log \
+	/usr/lib/aarch64-linux-gnu/NetworkManager/1.52.1/libnm-device-plugin-wifi.so; do
+	[ "$(stat -c %u:%g "$root_owned" 2>/dev/null || true)" = 0:0 ] || \
+		fail "unsafe-owner:$root_owned"
+done
+
+input_count=$(find /dev/input -maxdepth 1 -type c -name 'event*' 2>/dev/null |
+	wc -l | tr -d ' ')
+[ "$input_count" -gt 0 ] || fail input-events-absent
+
+{
+	printf 'result=pass\n'
+	printf 'stage=2-systemd-ram-root\n'
+	printf 'pid1=%s\n' "$(cat /proc/1/comm)"
+	printf 'os=debian-13\n'
+	printf 'architecture=%s\n' "$(uname -m)"
+	printf 'kernel=%s\n' "$(uname -r)"
+	printf 'model=%s\n' "$model"
+	printf 'root_mode=ram-loopback\n'
+	printf 'block_mounts=none\n'
+	printf 'userdata_node=present-unmounted\n'
+	printf 'drm_card0=present\n'
+	printf 'renderD128=present\n'
+	printf 'input_event_count=%s\n' "$input_count"
+	printf 'acm_console=present\n'
+	printf 'ssh_policy=installed-disabled-until-owner-initialization\n'
+	printf 'rootfs_system_ownership=root\n'
+} >/run/m1892-debian13-stage2-pass
+
+message='M1892_DEBIAN_STAGE2_RUNTIME_PASS systemd=pid1 root=ram userdata=unmounted'
+printf '%s\n' "$message" >/dev/console 2>/dev/null || true
+printf '%s\n' "$message" >/dev/kmsg 2>/dev/null || true
+printf '%s\n' "$message" >/dev/ttyGS0 2>/dev/null || true

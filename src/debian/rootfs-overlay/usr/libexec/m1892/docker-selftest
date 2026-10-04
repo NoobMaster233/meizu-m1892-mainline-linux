@@ -1,0 +1,112 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+# Explicit acceptance test only; it is never run on every boot.  The test
+# image is built from Debian's own static BusyBox, so no registry access or
+# third-party container content is required.
+run_id=m1892-debian-docker-$$
+image=m1892/debian-e2e-$run_id:local
+network=$run_id-network
+server=$run_id-server
+limited=$run_id-limited
+volume=$run_id-volume
+work=$(mktemp -d /tmp/m1892-debian-docker.XXXXXXXX)
+base=$work/base
+bind=$work/bind
+compose=$work/compose
+buildx=$work/buildx
+buildx_image=m1892/debian-buildx-$run_id:local
+
+cleanup()
+{
+	docker rm -f "$server" "$limited" >/dev/null 2>&1 || true
+	docker network rm "$network" >/dev/null 2>&1 || true
+	docker volume rm "$volume" >/dev/null 2>&1 || true
+	if [ -d "$compose" ]; then
+		(cd "$compose" && docker compose -p "$run_id" down --volumes --remove-orphans \
+			>/dev/null 2>&1) || true
+	fi
+	docker image rm "$buildx_image" "$image" >/dev/null 2>&1 || true
+	find "$work" -depth -delete 2>/dev/null || true
+}
+trap cleanup EXIT HUP INT TERM
+
+mkdir -p "$base/bin"
+install -m 0755 /bin/busybox "$base/bin/busybox"
+for applet in cat nc ping sh sleep uname wget; do
+	ln -s busybox "$base/bin/$applet"
+done
+tar -C "$base" -cf - . | docker import - "$image" >/dev/null
+test "$(docker run --rm "$image" sh -ec 'uname -m')" = aarch64
+echo M1892_DOCKER_PASS: local-container
+
+if [ "${M1892_DOCKER_SKIP_EXTERNAL:-0}" != 1 ]; then
+	docker run --rm "$image" sh -ec 'wget -q -O /dev/null http://example.com/'
+	echo M1892_DOCKER_PASS: default-bridge-dns-egress
+fi
+
+docker network create "$network" >/dev/null
+docker run -d --name "$server" --network "$network" "$image" sleep 300 >/dev/null
+for ignored in 1 2 3 4 5; do
+	docker run --rm --network "$network" "$image" ping -c 1 -W 1 "$server" \
+		>/dev/null 2>&1 && break
+	sleep 1
+done
+docker run --rm --network "$network" "$image" ping -c 1 -W 2 "$server" >/dev/null
+echo M1892_DOCKER_PASS: user-network-dns
+
+docker volume create "$volume" >/dev/null
+docker run --rm -v "$volume:/data" "$image" sh -ec 'printf volume-ok >/data/result'
+test "$(docker run --rm -v "$volume:/data:ro" "$image" cat /data/result)" = volume-ok
+echo M1892_DOCKER_PASS: named-volume
+
+mkdir -p "$bind"
+printf bind-ok >"$bind/input"
+test "$(docker run --rm -v "$bind:/host:ro" "$image" cat /host/input)" = bind-ok
+echo M1892_DOCKER_PASS: bind-mount
+
+docker run -d --name "$limited" --memory 64m "$image" sleep 30 >/dev/null
+test "$(docker inspect -f '{{.HostConfig.Memory}}' "$limited")" = 67108864
+docker rm -f "$limited" >/dev/null
+echo M1892_DOCKER_PASS: memory-limit
+
+docker rm -f "$server" >/dev/null
+docker run -d --name "$server" -p 127.0.0.1::8080 "$image" \
+	nc -l -p 8080 -e /bin/cat >/dev/null
+published_port=$(docker port "$server" 8080/tcp | awk -F: 'NR == 1 {print $NF}')
+case $published_port in ''|*[!0-9]*) echo 'M1892_DOCKER_FAIL: published-port' >&2; exit 1 ;; esac
+for ignored in 1 2 3 4 5; do
+	printf publish-ok | busybox nc -w 2 127.0.0.1 "$published_port" 2>/dev/null |
+		grep -qx publish-ok && break
+	sleep 1
+done
+docker inspect -f '{{.State.ExitCode}}' "$server" | grep -qx 0
+echo M1892_DOCKER_PASS: published-port
+
+mkdir -p "$compose"
+cat >"$compose/compose.yaml" <<EOF
+services:
+  writer:
+    image: $image
+    command: ["sh", "-ec", "printf compose-ok >/output/result"]
+    volumes:
+      - output:/output
+volumes:
+  output: {}
+EOF
+(cd "$compose" && docker compose -p "$run_id" run --rm writer >/dev/null)
+test "$(cd "$compose" && docker compose -p "$run_id" run --rm writer cat /output/result)" = compose-ok
+echo M1892_DOCKER_PASS: compose
+
+mkdir -p "$buildx"
+cat >"$buildx/Dockerfile" <<EOF
+FROM $image
+RUN printf buildx-ok >/buildx-result
+CMD ["cat", "/buildx-result"]
+EOF
+docker buildx build --load --tag "$buildx_image" "$buildx" >/dev/null
+test "$(docker run --rm "$buildx_image")" = buildx-ok
+echo M1892_DOCKER_PASS: buildx
+
+echo M1892_DOCKER_SELFTEST_OK

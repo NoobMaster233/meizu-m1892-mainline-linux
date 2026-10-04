@@ -1,0 +1,84 @@
+diff --git a/qvd-connection.c b/qvd-connection.c
+index 3e9618b..82a1710 100644
+--- a/qvd-connection.c
++++ b/qvd-connection.c
+@@ -151,8 +151,13 @@ void qvd_connection_set_handles(QVDConnection *conn,
+  * configure the resulting qmapmux netdev because the bearer was requested by
+  * the modem through IMSD rather than by NetworkManager.  The modem cannot
+  * complete IMS registration until this link has its reported IPv6 address and
+- * route.  Keep this beside bearer ownership in 81voltd so reconnects follow
+- * the same path and do not depend on a polling helper.
++ * link state.  Keep this beside bearer ownership in 81voltd so reconnects
++ * follow the same path and do not depend on a polling helper.
++ *
++ * The IMS bearer is not an Internet uplink.  NetworkManager owns the ordinary
++ * data bearer's main routing table.  Disable IPv6 RA default-router acceptance
++ * before bringing the IMS link up and remove any stale main-table default left
++ * by an older build; deliberately do not install an IMS default route here.
+  */
+ static gboolean run_ip(gchar **argv)
+ {
+@@ -206,16 +211,17 @@ static gboolean write_sysctl_zero(const gchar *path)
+ static void configure_m1892_ims_link(MMBearer *bearer)
+ {
+ 	MMBearerIpConfig *cfg;
+-	const gchar *iface, *address, *gateway;
++	const gchar *iface, *address;
+ 	g_autofree gchar *cidr = NULL;
++	g_autofree gchar *accept_ra_defrtr = NULL;
+ 	g_autofree gchar *accept_dad = NULL;
+ 	g_autofree gchar *dad_transmits = NULL;
+ 	guint prefix;
+ 	gchar *link_argv[] = { "ip", "link", "set", "dev", NULL, "up", NULL };
+ 	gchar *addr_argv[] = { "ip", "-6", "addr", "replace", NULL,
+ 			       "dev", NULL, NULL };
+-	gchar *route_argv[] = { "ip", "-6", "route", "replace", "default",
+-				"via", NULL, "dev", NULL, "metric", "1024", NULL };
++	gchar *flush_argv[] = { "ip", "-6", "route", "flush", "table", "main",
++				"default", "dev", NULL, NULL };
+ 
+ 	if (!mm_bearer_get_connected(bearer))
+ 		return;
+@@ -229,7 +235,6 @@ static void configure_m1892_ims_link(MMBearer *bearer)
+ 		return;
+ 
+ 	address = mm_bearer_ip_config_get_address(cfg);
+-	gateway = mm_bearer_ip_config_get_gateway(cfg);
+ 	prefix = mm_bearer_ip_config_get_prefix(cfg);
+ 	if (!address || !*address || prefix == 0 || prefix > 128) {
+ 		g_warning("IMS bearer %s has no usable IPv6 configuration", iface);
+@@ -237,6 +242,21 @@ static void configure_m1892_ims_link(MMBearer *bearer)
+ 		return;
+ 	}
+ 
++	accept_ra_defrtr = g_strdup_printf(
++		"/proc/sys/net/ipv6/conf/%s/accept_ra_defrtr", iface);
++	if (!write_sysctl_zero(accept_ra_defrtr)) {
++		g_warning("Could not disable IPv6 RA defaults for IMS interface %s", iface);
++		g_object_unref(cfg);
++		return;
++	}
++
++	flush_argv[8] = (gchar *)iface;
++	if (!run_ip(flush_argv)) {
++		g_object_unref(cfg);
++		return;
++	}
++	g_info("Removed stale IMS main-table defaults from %s", iface);
++
+ 	link_argv[4] = (gchar *)iface;
+ 	if (!run_ip(link_argv)) {
+ 		g_object_unref(cfg);
+@@ -256,12 +276,6 @@ static void configure_m1892_ims_link(MMBearer *bearer)
+ 		return;
+ 	}
+ 
+-	if (gateway && *gateway) {
+-		route_argv[6] = (gchar *)gateway;
+-		route_argv[8] = (gchar *)iface;
+-		run_ip(route_argv);
+-	}
+-
+ 	g_info("Configured IMS IPv6 link %s with %s", iface, cidr);
+ 	g_object_unref(cfg);
+ }

@@ -1,0 +1,22 @@
+[Unit]
+Description=M1892 stable Wi-Fi identity
+Requires=m1892-radio-online.service
+After=m1892-radio-online.service
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/wifi-identity
+RemainAfterExit=yes
+TimeoutStartSec=25
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_QIPCRTR

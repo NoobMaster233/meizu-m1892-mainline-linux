@@ -1,0 +1,36 @@
+From: M1892 Mainline Maintainers <m1892@example.invalid>
+Subject: [PATCH] battery: detect supplies by standard type attribute
+
+Mobile Linux power supplies are not required to use a BAT-prefixed sysfs
+directory name.  Accept the standard power_supply type=Battery attribute while
+retaining the existing BAT-name compatibility path.
+
+---
+ src/battery.cpp | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/battery.cpp b/src/battery.cpp
+index 81186af..4f31292 100644
+--- a/src/battery.cpp
++++ b/src/battery.cpp
+@@ -11,7 +11,17 @@ void BatteryStats::numBattery() {
+     fs::path path("/sys/class/power_supply/");
+     for (auto& p : fs::directory_iterator(path)) {
+         string fileName = p.path().filename();
+-        if (fileName.find("BAT") != std::string::npos) {
++        bool isBattery = fileName.find("BAT") != std::string::npos;
++
++        if (!isBattery) {
++            std::ifstream typeFile(p.path() / "type");
++            std::string type;
++
++            if (std::getline(typeFile, type) && type == "Battery")
++                isBattery = true;
++        }
++
++        if (isBattery) {
+             battPath[batteryCount] = p.path();
+             batteryCount += 1;
+         }
+-- 
+2.47.2

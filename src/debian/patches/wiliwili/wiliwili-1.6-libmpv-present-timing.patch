@@ -1,0 +1,151 @@
+diff --git a/wiliwili/include/view/mpv_core.hpp b/wiliwili/include/view/mpv_core.hpp
+index 3316596..6fe1de7 100644
+--- a/wiliwili/include/view/mpv_core.hpp
++++ b/wiliwili/include/view/mpv_core.hpp
+@@ -4,6 +4,7 @@
+ 
+ #pragma once
+ 
++#include <atomic>
+ #include <unordered_map>
+ #include <vector>
+ #include <string>
+@@ -486,6 +487,15 @@ private:
+     // 当前软件是否在前台的回调
+     brls::Event<bool>::Subscription focusSubscription;
+ 
++#if defined(BOREALIS_USE_OPENGL) && defined(MPV_USE_FB) && !defined(__SDL2__)
++    // libmpv invokes its callbacks on internal threads.  Coalesce them and
++    // consume them on the Borealis UI thread instead of growing the global
++    // brls::sync queue by one task per decoded frame or client event.
++    std::atomic<bool> renderUpdatePending{false};
++    std::atomic<bool> eventWakePending{false};
++    brls::VoidEvent::Subscription runLoopSubscription;
++#endif
++
+     /// Will be called in main thread to get events from mpv core
+     void eventMainLoop();
+ 
+diff --git a/wiliwili/source/view/mpv_core.cpp b/wiliwili/source/view/mpv_core.cpp
+index 64c96d6..5530e6f 100644
+--- a/wiliwili/source/view/mpv_core.cpp
++++ b/wiliwili/source/view/mpv_core.cpp
+@@ -203,6 +203,13 @@ static inline float aspectConverter(const std::string &value) {
+ }
+ 
+ void MPVCore::on_update(void *self) {
++#if defined(BOREALIS_USE_OPENGL) && defined(MPV_USE_FB) && !defined(__SDL2__)
++    auto *core = static_cast<MPVCore *>(self);
++    core->renderUpdatePending.store(true, std::memory_order_release);
++    // GLFW explicitly permits this call from any thread.  It wakes a UI loop
++    // which may be waiting because no input event has occurred.
++    glfwPostEmptyEvent();
++#else
+     brls::sync([]() {
+         uint64_t flags = mpvRenderContextUpdate(MPVCore::instance().getContext());
+ #if defined(MPV_NO_FB) || defined(BOREALIS_USE_DEKO3D) || defined(BOREALIS_USE_D3D11)
+@@ -227,10 +234,17 @@ void MPVCore::on_update(void *self) {
+         }
+ #endif
+     });
++#endif
+ }
+ 
+ void MPVCore::on_wakeup(void *self) {
++#if defined(BOREALIS_USE_OPENGL) && defined(MPV_USE_FB) && !defined(__SDL2__)
++    auto *core = static_cast<MPVCore *>(self);
++    core->eventWakePending.store(true, std::memory_order_release);
++    glfwPostEmptyEvent();
++#else
+     brls::sync([]() { MPVCore::instance().eventMainLoop(); });
++#endif
+ }
+ 
+ #if defined(MPV_BUNDLE_DLL)
+@@ -503,6 +517,16 @@ void MPVCore::init() {
+     command_async("set", "audio-client-name", APPVersion::getPackageName());
+     setVolume(MPVCore::VIDEO_VOLUME);
+ 
++#if defined(BOREALIS_USE_OPENGL) && defined(MPV_USE_FB) && !defined(__SDL2__)
++    // Ordinary libmpv client APIs stay on the UI thread.  One run-loop
++    // subscriber drains all currently queued events after each real UI frame.
++    runLoopSubscription = brls::Application::getRunLoopEvent()->subscribe([this]() {
++        if (eventWakePending.exchange(false, std::memory_order_acq_rel)) {
++            eventMainLoop();
++        }
++    });
++#endif
++
+     // set event callback
+     mpvSetWakeupCallback(mpv, on_wakeup, this);
+     // set render callback
+@@ -541,6 +565,16 @@ MPVCore::~MPVCore() = default;
+ #endif
+ 
+ void MPVCore::clean() {
++#if defined(BOREALIS_USE_OPENGL) && defined(MPV_USE_FB) && !defined(__SDL2__)
++    // Stop cross-thread callbacks before removing their UI consumer or
++    // destroying either libmpv object.
++    if (this->mpv_context) mpvRenderContextSetUpdateCallback(this->mpv_context, nullptr, nullptr);
++    if (this->mpv) mpvSetWakeupCallback(this->mpv, nullptr, nullptr);
++    brls::Application::getRunLoopEvent()->unsubscribe(runLoopSubscription);
++    renderUpdatePending.store(false, std::memory_order_release);
++    eventWakePending.store(false, std::memory_order_release);
++#endif
++
+     check_error(mpvCommandString(this->mpv, "quit"));
+ 
+     brls::Application::getWindowFocusChangedEvent()->unsubscribe(focusSubscription);
+@@ -770,11 +804,8 @@ void MPVCore::setFrameSize(brls::Rect r) {
+     glBindBuffer(GL_ARRAY_BUFFER, this->shader.vbo);
+     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+ 
+-    // 在视频暂停时调整纹理尺寸，视频画面会被清空为黑色，强制重新绘制一次，避免这个问题
+-    mpvRenderContextRender(mpv_context, mpv_params);
+-    glBindFramebuffer(GL_FRAMEBUFFER, default_framebuffer);
+-    glViewport(0, 0, (GLsizei)brls::Application::windowWidth, (GLsizei)brls::Application::windowHeight);
+-    mpvRenderContextReportSwap(mpv_context);
++    // A paused video may not emit another update after an FBO resize.
++    redraw = true;
+ #endif
+ }
+ 
+@@ -855,6 +886,31 @@ void MPVCore::draw(brls::Rect area, float alpha) {
+         }
+     }
+ #else
++    bool shouldRender = redraw;
++#if !defined(__SDL2__)
++    if (renderUpdatePending.exchange(false, std::memory_order_acq_rel)) {
++        uint64_t flags = mpvRenderContextUpdate(this->mpv_context);
++        shouldRender   = shouldRender || (flags & MPV_RENDER_UPDATE_FRAME);
++    }
++#endif
++
++    // Consume the decoded frame in the actual UI draw pass.  Rendering to an
++    // off-screen FBO is not a display presentation, so reporting a synthetic
++    // swap here would feed libmpv incorrect presentation timestamps.
++    if (shouldRender) {
++        int blockForTargetTime = 0;
++        mpv_render_param nonBlockingParams[] = {
++            mpv_params[0],
++            mpv_params[1],
++            {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &blockForTargetTime},
++            {MPV_RENDER_PARAM_INVALID, nullptr},
++        };
++        mpvRenderContextRender(this->mpv_context, nonBlockingParams);
++        glBindFramebuffer(GL_FRAMEBUFFER, default_framebuffer);
++        glViewport(0, 0, (GLsizei)brls::Application::windowWidth, (GLsizei)brls::Application::windowHeight);
++        redraw = false;
++    }
++
+     // OpenGL 将 FBO 绘制到屏幕上
+     glUseProgram(shader.prog);
+     glBindTexture(GL_TEXTURE_2D, this->media_texture);
+@@ -1406,4 +1462,4 @@ void MPVCore::_command_async(const std::vector<std::string> &commands) {
+     }
+     res.emplace_back(nullptr);
+     mpvCommandAsync(mpv, 0, res.data());
+-}
+\ No newline at end of file
++}

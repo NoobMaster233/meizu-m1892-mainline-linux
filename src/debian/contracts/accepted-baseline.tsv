@@ -1,0 +1,16 @@
+area	accepted_baseline_contract	debian_revalidation
+recovery	independent offline Boot/Recovery assets hash-verified	must remain available before first device write
+storage	UFS persistent ext4 and safe first-boot expansion	mount loopback read-write without UFS/ext4 errors
+display	1080x2160 OLED with accepted panel timing and TE	visible DRM/KWin output with no display stall
+input	Synaptics multitouch and physical volume keys	touch and keys work in libinput and Plasma
+graphics	Freedreno FD630 hardware rendering	KWin Wayland uses FD630, not llvmpipe
+sensors	accelerometer, light, proximity and rotation	iio-sensor-proxy plus Plasma auto-rotation revalidated
+wifi	2.4/5 GHz including 80 MHz compatibility	NetworkManager revalidated after boot, never a boot gate
+cellular	LTE IPv4/IPv6 and Wi-Fi fallback	ModemManager/systemd path revalidated separately
+telephony	one carrier/SIM call, SMS and bidirectional call audio	Plasma Dialer/Spacebar and call audio require new E2E tests
+bluetooth	WCN3990 scan, pair, reconnect and HID	BlueZ/Plasma revalidated with physical HID
+audio	built-in speaker and Q6Voice receiver/speaker/mic	PipeWire/UCM/callaudiod/q6voiced route revalidated
+power	display blank, explicit s2idle, shutdown and restart	systemd-logind/PowerDevil behavior and wake revalidated
+charging	conservative 5 V and bounded host/sink accessory path	retain voltage/current safety limits
+usb	separate development Recovery ACM/NCM	keep debug recovery; do not expose in product boot by default
+docker	engine, compose, buildx, networking and storage	cgroup v2/systemd integration revalidated

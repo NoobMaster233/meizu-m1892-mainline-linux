@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/timer";
+
+		__overlay__ {
+			/* The SDM845 system counter stops during M1892 s2idle. */
+			arm,no-tick-in-suspend;
+		};
+	};
+};

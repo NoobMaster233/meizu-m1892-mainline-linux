@@ -1,0 +1,33 @@
+diff --git a/qvd-message.c b/qvd-message.c
+index 154f2c7..22d9e03 100644
+--- a/qvd-message.c
++++ b/qvd-message.c
+@@ -8,6 +8,7 @@
+ #include <glib.h>
+ #include <libqmi-glib.h>
+ #include <libqrtr.h>
++#include <stdbool.h>
+ #include <stdio.h>
+ #include <string.h>
+ 
+diff --git a/qvd-modem.c b/qvd-modem.c
+index 3c366a8..33ff6ab 100644
+--- a/qvd-modem.c
++++ b/qvd-modem.c
+@@ -8,6 +8,7 @@
+ #include <glib.h>
+ #include <libmm-glib.h>
+ #include <ModemManager-enums.h>
++#include <stdbool.h>
+ #include <stdio.h>
+ 
+ #include "qvd-connection.h"
+@@ -427,6 +428,8 @@ QVDConnection *qvd_modem_get_connection(QVDModem *ctx,
+ 
+ 		props = mm_bearer_properties_new();
+ 		mm_bearer_properties_set_apn(props, apn);
+ 		mm_bearer_properties_set_ip_type(props, ip_family);
++		if (!g_ascii_strcasecmp(apn, "ims"))
++			mm_bearer_properties_set_apn_type(props, MM_BEARER_APN_TYPE_IMS);
+ 		if (profile_idx_3gpp != 0xffff)
+ 			mm_bearer_properties_set_profile_id(props, profile_idx_3gpp);

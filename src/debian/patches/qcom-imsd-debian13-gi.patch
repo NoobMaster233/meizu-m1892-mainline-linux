@@ -1,0 +1,121 @@
+diff --git a/src/qcom_imsd/main.py b/src/qcom_imsd/main.py
+index 2a21569..af4d1e0 100644
+--- a/src/qcom_imsd/main.py
++++ b/src/qcom_imsd/main.py
+@@ -345,39 +345,8 @@ class IMSDaemon(StateMachine):
+             await self.e_usim_missing()
+ 
+     async def on_enter_st_disable_imsd(self):
+-        """ Disable the ims services and wait a couple seconds before going into configuring and enable imsd """
+-        try:
+-            # disabling wifi for now and not enabling it
+-            to_disable = ['reg', 'volte', 'ut', 'wifi', 'data']
+-            enabled_services = await self._imss.get_ims_services()
+-            LOG.debug(f"IMS current enabled services: {enabled_services}")
+-
+-            need_to_disable = False
+-            for svc in to_disable:
+-                if svc not in enabled_services:
+-                    continue
+-
+-                if enabled_services[svc] is True:
+-                    need_to_disable = True
+-                    break
+-
+-            if need_to_disable:
+-                LOG.debug("IMS need to disable some services")
+-                # disable imsd to reset its state
+-                disable_svcs = {svc: False for svc in to_disable}
+-                resp = await self._imss.set_ims_services(disable_svcs)
+-                enabled_services = await self._imss.get_ims_services()
+-                LOG.debug(f"IMS returned {enabled_services}")
+-            else:
+-                LOG.debug("IMS no need to disable some services.")
+-
+-            # TODO: we could wait for an indication here instead
+-            LOG.debug("Waiting for 10 seconds to give the IMS stack time to follow up")
+-            await asyncio.sleep(10)
+-        except:
+-            LOG.exception("Failed to disable imsd")
+-            await self.st_failed()
+-
++        """Keep packet data attached and apply the desired IMS state idempotently."""
++        LOG.info("Skipping destructive IMS reset; preserving active packet data")
+         await self.e_disabled_imsd()
+ 
+     async def on_enter_st_configure_imsd(self):
+@@ -392,15 +361,24 @@ class IMSDaemon(StateMachine):
+             to_enable = ['reg', 'volte', 'ut', 'wifi', 'data']
+             LOG.info(f"IMS Require following IMS services: {to_enable}")
+ 
+-            enable_services = {svc: True for svc in to_enable}
+-            resp = await self._imss.set_ims_services(enable_services)
+-
+             enabled_services = await self._imss.get_ims_services()
++            enable_services = {
++                svc: True for svc in to_enable
++                if enabled_services.get(svc) is not True
++            }
++            if enable_services:
++                LOG.info(f"Enabling missing IMS services: {list(enable_services)}")
++                await self._imss.set_ims_services(enable_services)
++                enabled_services = await self._imss.get_ims_services()
++            else:
++                LOG.info("Required IMS services are already enabled")
+             LOG.info(f"IMS service are now: {enabled_services}")
+ 
+-            resp = await self._nas.get_voice_preference()
+-            resp = await self._nas.set_voice_preference(Qmi.NasVoiceDomainPreference.PS_PREFERRED)
+-            resp = await self._nas.get_voice_preference()
++            voice_preference = await self._nas.get_voice_preference()
++            if voice_preference != Qmi.NasVoiceDomainPreference.PS_PREFERRED:
++                await self._nas.set_voice_preference(Qmi.NasVoiceDomainPreference.PS_PREFERRED)
++                voice_preference = await self._nas.get_voice_preference()
++            LOG.info(f"Voice domain preference: {voice_preference}")
+ 
+             await self.e_configured()
+         except:
+diff --git a/src/qcom_imsd/services.py b/src/qcom_imsd/services.py
+index 35cef60..7183ed8 100644
+--- a/src/qcom_imsd/services.py
++++ b/src/qcom_imsd/services.py
+@@ -1,6 +1,8 @@
+ #!/usr/bin/env python3
+ # -*- coding: utf-8 -*-
+ 
++from __future__ import annotations
++
+ import asyncio
+ import logging
+ from typing import NewType
+@@ -85,8 +87,8 @@ class UIM():
+             card['state'] = state.card_state
+             card['error'] = state.error_code
+ 
+-            LOG.debug(f"UIM Card {idx} State {state.card_state.name}")
+-            LOG.debug(f"UIM Card {idx} Error {state.error_code.name}")
++            LOG.debug(f"UIM Card {idx} State {state.card_state}")
++            LOG.debug(f"UIM Card {idx} Error {state.error_code}")
+ 
+             if state.card_state != Qmi.UimCardState.PRESENT:
+                 cards[idx] = SimState(slot=idx, ready=False, state=state.card_state)
+@@ -96,8 +98,8 @@ class UIM():
+             ready = False
+             usim_aid = []
+             for app in state.applications:
+-                LOG.debug(f"UIM Card {idx} App state: {app.state.name}")
+-                LOG.debug(f"UIM Card {idx} App type:  {app.type.name}")
++                LOG.debug(f"UIM Card {idx} App state: {app.state}")
++                LOG.debug(f"UIM Card {idx} App type:  {app.type}")
+                 aid = bytes(app.application_identifier_value)
+                 LOG.debug(f"UIM Card {idx} App aid:   {aid.hex()}")
+ 
+@@ -169,7 +171,7 @@ class UIM():
+             raise SimcardError("SimcardError: Simcard Response not 0x9000")
+ 
+     async def st_get_imsi(self, session: Qmi.UimSessionType = Qmi.UimSessionType.PRIMARY_GW_PROVISIONING, timeout: int = 3) -> str:
+-        LOG.info(f"Reading IMSI on session {session.name}")
++        LOG.info(f"Reading IMSI on session {session}")
+         read_transparent = Qmi.MessageUimReadTransparentInput.new()
+         read_transparent.set_file(USIM_FILE_IMSI, USIM_PATH_UIM)
+         read_transparent.set_read_information(0, 2048)

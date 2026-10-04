@@ -1,0 +1,12 @@
+[Unit]
+Description=Recover an interrupted M1892 OEM account handoff
+After=local-fs.target systemd-sysusers.service
+Before=display-manager.service
+ConditionPathExists=!/var/lib/m1892/oem-owner-created
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/oem-setup-recover
+
+[Install]
+WantedBy=multi-user.target

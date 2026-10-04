@@ -1,0 +1,28 @@
+# Gamescope virtual game display. Changes apply after Steam exits and restarts.
+# 1440x720 preserves a 720-line render target while matching the M1892's 2:1
+# landscape panel, so fit scaling fills 2160x1080 without distortion or crop.
+# Keep the output at the physical landscape size unless diagnosing the outer
+# compositor.
+M1892_GAMESCOPE_GAME_WIDTH=1440
+M1892_GAMESCOPE_GAME_HEIGHT=720
+M1892_GAMESCOPE_OUTPUT_WIDTH=2160
+M1892_GAMESCOPE_OUTPUT_HEIGHT=1080
+M1892_GAMESCOPE_SCALER=fit
+# Linear is the accepted performance default on A630.  FSR/NIS currently add
+# a separate Gamescope compute pass that cuts this workload from ~59 to
+# 30--40 FPS; retain sharpness only as an explicit experiment setting.
+M1892_GAMESCOPE_FILTER=linear
+M1892_GAMESCOPE_SHARPNESS=3
+
+# SDM845 is heterogeneous: CPU0-3 are little cores and CPU4-7 are big cores.
+# Keep Gamescope, its Xwayland and MangoApp on the big cluster and Steam/CEF on
+# the little cluster.  Valve's ARM64 steam-launch-wrapper interprets 0xf0 as
+# CPU4-7 and applies it to every launched game before exec, so this does not
+# require per-game LaunchOptions or a polling daemon.
+M1892_GAMESCOPE_CPUSET=4-7
+M1892_STEAM_CPUSET=0-3
+M1892_STEAM_GAME_AFFINITY_MASK=0xf0
+
+# Detailed MangoApp layout.  MANGOHUD_CONFIG is the upstream-supported runtime
+# override and takes precedence over Gamescope's legacy temporary config.
+M1892_MANGOAPP_CONFIG=legacy_layout=0,position=top-left,font_size=20,table_columns=3,gpu_stats,gpu_temp,gpu_core_clock,proc_vram,cpu_stats,cpu_temp,cpu_mhz,core_load,ram,procmem,battery,battery_watt,fps,frametime,frame_timing,resolution,refresh_rate,fsr,fex_stats

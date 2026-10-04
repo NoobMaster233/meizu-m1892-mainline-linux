@@ -1,0 +1,22 @@
+[Unit]
+Description=M1892 Qualcomm Bluetooth UART transport
+Requires=m1892-radio-online.service
+After=m1892-radio-online.service
+Before=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe hci_uart
+RemainAfterExit=yes
+TimeoutStartSec=15
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

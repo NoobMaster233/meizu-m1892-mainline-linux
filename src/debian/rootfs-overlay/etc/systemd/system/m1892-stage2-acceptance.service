@@ -1,0 +1,12 @@
+[Unit]
+Description=M1892 Debian 13 RAM-root acceptance gate
+After=local-fs.target systemd-udevd.service
+Before=getty.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/stage2-acceptance
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

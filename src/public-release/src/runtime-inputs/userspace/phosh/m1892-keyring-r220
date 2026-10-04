@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+# greetd autologin has no password token for pam_gnome_keyring.  Replace that
+# deferred --login instance inside the real Phosh session so applications get
+# one user-owned Secret Service instead of an uninitialised login daemon.
+uid=$(id -u)
+test "$uid" -ne 0
+test "${XDG_RUNTIME_DIR:-}" = "/run/user/$uid"
+test -n "${DBUS_SESSION_BUS_ADDRESS:-}"
+
+exec /usr/bin/gnome-keyring-daemon \
+	--replace --foreground --components=secrets,pkcs11

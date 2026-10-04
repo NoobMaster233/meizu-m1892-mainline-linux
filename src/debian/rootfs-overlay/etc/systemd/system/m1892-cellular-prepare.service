@@ -1,0 +1,22 @@
+[Unit]
+Description=M1892 IPA and slot-1 UIM initialization
+Requires=m1892-radio-online.service
+After=m1892-radio-online.service
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/cellular-prepare start
+RemainAfterExit=yes
+TimeoutStartSec=150
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

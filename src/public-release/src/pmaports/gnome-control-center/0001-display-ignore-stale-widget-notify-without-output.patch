@@ -1,0 +1,84 @@
+--- a/panels/display/cc-display-settings.c
++++ b/panels/display/cc-display-settings.c
+@@ -685,7 +685,7 @@
+ static void
+ on_enabled_row_active_changed_cb (CcDisplaySettings *self)
+ {
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   cc_display_monitor_set_active (self->selected_output,
+@@ -700,7 +700,7 @@
+   gint idx;
+   g_autoptr(GObject) obj = NULL;
+ 
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   idx = adw_combo_row_get_selected (ADW_COMBO_ROW (self->orientation_row));
+@@ -721,7 +721,7 @@
+   gint idx;
+   g_autoptr(CcDisplayMode) mode = NULL;
+ 
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   idx = adw_combo_row_get_selected (ADW_COMBO_ROW (self->refresh_rate_row));
+@@ -738,7 +738,7 @@
+ static void
+ on_variable_refresh_rate_active_changed_cb (CcDisplaySettings *self)
+ {
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   if (!adw_switch_row_get_active (self->variable_refresh_rate_row))
+@@ -761,7 +761,7 @@
+   gint idx;
+   g_autoptr(CcDisplayMode) mode = NULL;
+ 
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   idx = adw_combo_row_get_selected (ADW_COMBO_ROW (self->resolution_row));
+@@ -786,7 +786,7 @@
+   AdwToggle *scale_toggle;
+   guint current_toggle_id;
+ 
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   current_toggle_id = adw_toggle_group_get_active (self->scale_toggle_group);
+@@ -809,7 +809,7 @@
+   double scale;
+   g_autoptr(GObject) obj = NULL;
+ 
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   idx = adw_combo_row_get_selected (ADW_COMBO_ROW (self->scale_combo_row));
+@@ -828,7 +828,7 @@
+ {
+   CcDisplayColorMode color_mode;
+ 
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   if (adw_switch_row_get_active (self->hdr_row))
+@@ -845,7 +845,7 @@
+ static void
+ on_underscanning_row_active_changed_cb (CcDisplaySettings *self)
+ {
+-  if (self->updating)
++  if (self->updating || !self->selected_output)
+     return;
+ 
+   cc_display_monitor_set_underscanning (self->selected_output,
+

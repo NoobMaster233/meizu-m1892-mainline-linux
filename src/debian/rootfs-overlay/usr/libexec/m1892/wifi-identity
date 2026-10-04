@@ -1,0 +1,110 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+umask 077
+
+fail() { echo "M1892_WIFI_IDENTITY_FAIL: $*" >&2; exit 1; }
+
+normalize_qmi_address()
+{
+	printf '%s\n' "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+valid_unicast_address()
+{
+	address=$1
+	case $address in
+		([0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]:[0-9A-F][0-9A-F]) ;;
+		(*) return 1 ;;
+	esac
+	case $address in
+		00:00:00:00:00:00|FF:FF:FF:FF:FF:FF) return 1 ;;
+	esac
+	first=${address%%:*}
+	[ $((0x$first & 1)) -eq 0 ]
+}
+
+if [ "${1:-}" = --self-test ]; then
+	test_address=$(normalize_qmi_address 00:02:03:04:05:06)
+	[ "$test_address" = 00:02:03:04:05:06 ] || fail selftest-byte-order
+	valid_unicast_address "$test_address" || fail selftest-unicast
+	! valid_unicast_address 01:02:03:04:05:06 || fail selftest-multicast
+	! valid_unicast_address 00:00:00:00:00:00 || fail selftest-zero
+	echo M1892_WIFI_IDENTITY_SELFTEST_PASS
+	exit 0
+fi
+
+[ "$(id -u)" = 0 ] || fail root-required
+[ "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = "Meizu 16th Plus (M1892)" ] ||
+	fail wrong-hardware
+
+source=networkmanager-stable-ssid
+policy=stable-ssid
+address=unavailable
+qmi_output=
+if systemctl is-active --quiet m1892-radio-online.service &&
+	command -v qmicli >/dev/null && command -v ip >/dev/null; then
+	# ath10k's module init returns before mac80211 has necessarily published
+	# wlan0.  Wait on the real sysfs state, not a fixed boot delay.
+	wait_step=0
+	while [ ! -d /sys/class/net/wlan0 ] && [ "$wait_step" -lt 60 ]; do
+		wait_step=$((wait_step + 1))
+		sleep 0.1
+	done
+	[ -d /sys/class/net/wlan0 ] || qmi_output=unavailable
+
+	# MPSS is running before every QMI service is necessarily registered.
+	# Probe the actual DMS operation with a bounded retry instead of sleeping a
+	# fixed amount or letting an early failure choose a new identity forever.
+	if [ -d /sys/class/net/wlan0 ]; then
+		for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+			qmi_output=$(timeout 1 qmicli -d qrtr://0 --dms-get-mac-address=wlan 2>/dev/null || true)
+			printf '%s\n' "$qmi_output" |
+				grep -q 'MAC address read:' && break
+			sleep 0.5
+		done
+	fi
+fi
+raw=$(printf '%s\n' "$qmi_output" |
+	awk '/Contents:/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}')
+if printf '%s\n' "$raw" | grep -Eq '^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$'; then
+	# QMI DMS WLAN is already in station-address order on M1892.  Bluetooth
+	# uses the controller-little-endian order and is reversed by its own helper;
+	# the two DMS payloads must not share one conversion rule.
+	candidate=$(normalize_qmi_address "$raw")
+	if valid_unicast_address "$candidate"; then
+		if ip link set dev wlan0 down &&
+			ip link set dev wlan0 address "$candidate"; then
+			actual=$(tr '[:lower:]' '[:upper:]' </sys/class/net/wlan0/address)
+			if [ "$actual" = "$candidate" ]; then
+				source=qmi-dms-wlan
+				policy=preserve
+				address=$candidate
+			fi
+		fi
+	fi
+fi
+
+install -d -m 0755 /run/NetworkManager/conf.d
+temporary=$(mktemp /run/NetworkManager/conf.d/.70-m1892-wifi-identity.XXXXXX)
+cat >"$temporary" <<EOF
+# Generated before NetworkManager starts.  Per-profile settings still take priority.
+[connection-m1892-wlan0]
+match-device=interface-name:wlan0
+wifi.cloned-mac-address=$policy
+# Current Debian/ath10k resumes immediately when WLAN is armed as a system
+# wake source.  Explicitly disable every NetworkManager WoWLAN trigger; using
+# "ignore" would preserve stale supplicant state across profile changes.
+wifi.wake-on-wlan=0
+EOF
+chmod 0644 "$temporary"
+mv "$temporary" /run/NetworkManager/conf.d/70-m1892-wifi-identity.conf
+
+{
+	echo format=m1892-wifi-identity-v1
+	echo source="$source"
+	echo policy="$policy"
+	echo address="$address"
+} >/run/m1892-wifi-identity.state
+
+echo "M1892_WIFI_IDENTITY_PASS source=$source policy=$policy"

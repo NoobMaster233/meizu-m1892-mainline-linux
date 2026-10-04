@@ -1,0 +1,46 @@
+diff --git a/lib/telephonySupport/modemcontroller.cpp b/lib/telephonySupport/modemcontroller.cpp
+index eba5f01..322a5d5 100644
+--- a/lib/telephonySupport/modemcontroller.cpp
++++ b/lib/telephonySupport/modemcontroller.cpp
+@@ -64,16 +64,19 @@ void ModemController::init(std::optional<QString> modemPath)
+     m_interface = m_modem->modemInterface();
+ 
+     connect(m_interface.get(), &ModemManager::Modem::bearerAdded, this, [this](const QString &bearer) {
+-        m_bearer = m_interface->findBearer(bearer);
++        const auto candidate = m_interface->findBearer(bearer);
++        if (!candidate) {
++            return;
++        }
+ 
+-        QList<QSharedPointer<ModemManager::Bearer>> bearers = m_interface->listBearers();
+-        for (const ModemManager::Bearer::Ptr &item : bearers) {
+-            if (item->uni() != bearer) {
+-                item->disconnect();
+-                m_interface->deleteBearer(item->uni());
+-            }
++        const auto apnType = candidate->properties().value(QStringLiteral("apn-type")).toUInt();
++        if (apnType & MM_BEARER_APN_TYPE_IMS) {
++            qDebug() << "Ignoring IMS bearer for Spacebar data state:" << bearer;
++            return;
+         }
+ 
++        m_bearer = candidate;
++
+         // whether or not the bearer is connected and thus whether packet data communication using this bearer is possible
+         connect(m_bearer.data(), &ModemManager::Bearer::connectedChanged, this, [this](bool isConnected) {
+             Q_EMIT modemDataConnectedChanged(isConnected);
+@@ -88,12 +91,12 @@ void ModemController::init(std::optional<QString> modemPath)
+ 
+         dnsServers = getDNS(m_bearer);
+         qDebug() << "dns:" << dnsServers;
+-        connect(m_bearer.data(), &ModemManager::Bearer::ip4ConfigChanged, this, [this, bearers](const ModemManager::IpConfig &ipv4Config) {
++        connect(m_bearer.data(), &ModemManager::Bearer::ip4ConfigChanged, this, [this](const ModemManager::IpConfig &ipv4Config) {
+             dnsServers = getDNS(m_bearer);
+             qDebug() << "dns4 updated:" << dnsServers;
+         });
+ 
+-        connect(m_bearer.data(), &ModemManager::Bearer::ip6ConfigChanged, this, [this, bearers](const ModemManager::IpConfig &ipv6Config) {
++        connect(m_bearer.data(), &ModemManager::Bearer::ip6ConfigChanged, this, [this](const ModemManager::IpConfig &ipv6Config) {
+             dnsServers = getDNS(m_bearer);
+             qDebug() << "dns6 updated:" << dnsServers;
+         });

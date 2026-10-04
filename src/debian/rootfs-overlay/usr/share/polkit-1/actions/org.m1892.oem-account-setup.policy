@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>M1892 Mainline Project</vendor>
+  <action id="org.m1892.oem-account-setup">
+    <description>Create the owner account on this M1892</description>
+    <description xml:lang="zh_CN">为这台魅族 16th Plus 创建机主账户</description>
+    <message>Authentication is required to create the owner account</message>
+    <message xml:lang="zh_CN">创建机主账户需要授权</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/m1892/oem-calamares-wrapper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

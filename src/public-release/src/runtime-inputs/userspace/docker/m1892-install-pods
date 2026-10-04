@@ -1,0 +1,82 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail()
+{
+	echo "M1892_PODS_INSTALL_FAIL: $*" >&2
+	exit 1
+}
+
+test "$(id -u)" = 0 || fail root-required
+test "$(tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null)" = \
+	'Meizu 16th Plus (M1892)' || fail wrong-model
+
+record=$(getent passwd | awk -F: '
+	$3 >= 1000 && $3 != 65534 && $6 ~ "^/home/" && $7 !~ /(nologin|false)$/ {
+		print; count++
+	}
+	END { if (count != 1) exit 1 }
+') || fail regular-user-count
+daily_user=$(printf '%s\n' "$record" | cut -d: -f1)
+daily_uid=$(printf '%s\n' "$record" | cut -d: -f3)
+daily_gid=$(printf '%s\n' "$record" | cut -d: -f4)
+daily_home=$(printf '%s\n' "$record" | cut -d: -f6)
+templates=/usr/local/share/m1892-r6/docker
+
+test -r "$templates/portals.conf" || fail missing-portals-template
+test -r "$templates/pods-connections.json" || fail missing-connections-template
+getent group docker | awk -F: -v user="$daily_user" '
+	$1 == "docker" {
+		n=split($4, members, ",")
+		for (i=1; i<=n; i++) if (members[i] == user) found=1
+	}
+	END { exit !found }
+' || fail desktop-user-not-in-docker-group
+rc-service docker status >/dev/null 2>&1 || fail docker-not-running
+test -S /run/docker.sock || fail docker-socket-missing
+
+apk add flatpak
+flatpak remote-add --system --if-not-exists flathub \
+	https://flathub.org/repo/flathub.flatpakrepo
+flatpak install --system --noninteractive flathub com.github.marhkb.Pods
+
+# install(1) does not repair ownership of an already-created parent directory.
+# Normalize every directory in the two paths explicitly; this prevents a
+# root-created ~/.var from making Pods fail with mkdirat(data): Permission denied.
+for directory in \
+	"$daily_home/.config" \
+	"$daily_home/.config/xdg-desktop-portal" \
+	"$daily_home/.var" \
+	"$daily_home/.var/app" \
+	"$daily_home/.var/app/com.github.marhkb.Pods" \
+	"$daily_home/.var/app/com.github.marhkb.Pods/config" \
+	"$daily_home/.var/app/com.github.marhkb.Pods/config/pods"; do
+	install -d -m 0700 "$directory"
+	chown "$daily_uid:$daily_gid" "$directory"
+done
+install -m 0644 "$templates/portals.conf" \
+	"$daily_home/.config/xdg-desktop-portal/portals.conf"
+install -m 0600 "$templates/pods-connections.json" \
+	"$daily_home/.var/app/com.github.marhkb.Pods/config/pods/connections.json"
+chown "$daily_uid:$daily_gid" \
+	"$daily_home/.config/xdg-desktop-portal/portals.conf" \
+	"$daily_home/.var/app/com.github.marhkb.Pods/config/pods/connections.json"
+
+setpriv --reuid="$daily_uid" --regid="$daily_gid" --init-groups \
+	env HOME="$daily_home" USER="$daily_user" LOGNAME="$daily_user" \
+	XDG_RUNTIME_DIR="/run/user/$daily_uid" \
+	flatpak run --command=gsettings com.github.marhkb.Pods set \
+	com.github.marhkb.Pods last-used-connection \
+	"'18920000-0000-4000-8000-000000000001'"
+
+flatpak info --system com.github.marhkb.Pods >/dev/null || fail flatpak-app-missing
+test "$(stat -c %u "$daily_home/.var")" = "$daily_uid" || fail var-owner
+test "$(stat -c %u "$daily_home/.var/app/com.github.marhkb.Pods/config/pods/connections.json")" = \
+	"$daily_uid" || fail connections-owner
+grep -Fq 'unix:///run/docker.sock' \
+	"$daily_home/.var/app/com.github.marhkb.Pods/config/pods/connections.json" ||
+	fail docker-connection-missing
+
+echo 'M1892_PODS_INSTALL_PASS'
+echo 'Log out and back in, or reboot once, before checking the application drawer.'

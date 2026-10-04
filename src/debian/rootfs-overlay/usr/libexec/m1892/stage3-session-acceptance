@@ -1,0 +1,89 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+evidence=$runtime/m1892-debian13-stage3-egl.txt
+marker=$runtime/m1892-debian13-stage3-session-pass
+[ "${XDG_SESSION_TYPE:-}" = wayland ] || exit 1
+[ -n "${WAYLAND_DISPLAY:-}" ] || exit 1
+[ -S "$runtime/$WAYLAND_DISPLAY" ] || exit 1
+account_mode=$(sed -n 's/^account_mode=//p' /etc/m1892-rootfs-identity)
+
+case "$account_mode" in
+	recovery-live|development-persistent)
+		grep -Fxq 'Autolock=false' "$HOME/.config/kscreenlockerrc" || exit 1
+		grep -Fxq 'LockOnResume=false' "$HOME/.config/kscreenlockerrc" || exit 1
+		[ "$(grep -Fxc 'LockBeforeTurnOffDisplay=false' \
+			"$HOME/.config/powerdevilrc")" = 3 ] || exit 1
+		grep -Fxq 'Enabled=false' "$HOME/.config/kwalletrc" || exit 1
+		grep -Fxq 'First Use=false' "$HOME/.config/kwalletrc" || exit 1
+		screen_blank_policy=development-dpms-without-lock
+		wallet_policy=disabled-for-passwordless-development
+		;;
+	oem-owner)
+		# The temporary setup session is deliberately not an owner acceptance.
+		[ "$(id -un)" != m1892-setup ] || exit 0
+		owner_marker=/var/lib/m1892/oem-owner-created
+		if [ ! -r "$owner_marker" ]; then
+			printf 'M1892_DEBIAN_STAGE3_SESSION_FAIL: oem-owner-marker-unreadable\n' >&2
+			exit 1
+		fi
+		owner=$(sed -n 's/^owner=//p' "$owner_marker" 2>/dev/null)
+		[ -n "$owner" ] && [ "$owner" = "$(id -un)" ] || exit 1
+		[ "$(id -u)" -ge 1000 ] && [ "$HOME" = "/home/$owner" ] || exit 1
+		[ "$(stat -c %U:%G "$HOME")" = "$owner:$owner" ] || exit 1
+		if [ -f "$HOME/.config/kwalletrc" ]; then
+			! grep -Fxq 'Enabled=false' "$HOME/.config/kwalletrc" || exit 1
+		fi
+		screen_blank_policy=distribution-owner-default
+		wallet_policy=distribution-owner-default
+		;;
+	*) exit 1 ;;
+esac
+grep -Fxq 'disabledQuickSettings=org.kde.plasma.quicksetting.record' \
+	/etc/xdg/plasmamobilerc || exit 1
+grep -Fxq '[Applications]' "$HOME/.config/applications-blacklistrc" || exit 1
+application_blacklist=$(sed -n 's/^blacklist=//p' \
+	"$HOME/.config/applications-blacklistrc")
+for entry in systemsettings kdesystemsettings; do
+	printf '%s\n' "$application_blacklist" | tr ',' '\n' | grep -Fxq "$entry" || exit 1
+done
+! printf '%s\n' "$application_blacklist" | tr ',' '\n' |
+	grep -Fxq org.kde.mobile.plasmasettings || exit 1
+[ "$(readlink -f /usr/share/icons/hicolor/scalable/apps/preferences-system.svg)" = \
+	/usr/share/icons/breeze/apps/48/systemsettings.svg ] || exit 1
+[ -f /usr/lib/aarch64-linux-gnu/qt6/plugins/imageformats/libqsvg.so ] || exit 1
+[ -f /usr/lib/aarch64-linux-gnu/qt5/plugins/imageformats/libqsvg.so ] || exit 1
+[ -f /usr/lib/aarch64-linux-gnu/libcanberra-0.30/libcanberra-pulse.so ] || exit 1
+[ ! -e /usr/local/bin/plasma-mobile-initial-start ] || exit 1
+[ "$(command -v plasma-mobile-initial-start)" = /usr/bin/plasma-mobile-initial-start ] || exit 1
+[ "${QT_QUICK_BACKEND:-}" != software ] || exit 1
+
+eglinfo -B -p wayland >"$evidence" 2>&1 || exit 1
+if grep -qiE 'llvmpipe|softpipe|software rasterizer' "$evidence"; then
+	exit 1
+fi
+grep -qiE 'freedreno|adreno|FD630' "$evidence" || exit 1
+tmp=$marker.$$
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+{
+	printf 'result=pass\n'
+	printf 'uid=%s\n' "$(id -u)"
+	printf 'session_type=wayland\n'
+	printf 'wayland_display=%s\n' "$WAYLAND_DISPLAY"
+	printf 'renderer=msm-freedreno\n'
+	printf 'account_mode=%s\n' "$account_mode"
+	printf 'screen_blank_policy=%s\n' "$screen_blank_policy"
+	printf 'wallet_policy=%s\n' "$wallet_policy"
+	printf 'quick_settings=invalid-record-tile-disabled\n'
+	printf 'settings_launcher=plasma-mobile-folio-user-blacklist\n'
+	printf 'desktop_icons=system-settings-alias-present\n'
+	printf 'qt_svg_imageformat=present\n'
+	printf 'maliit_qt5_svg_imageformat=present\n'
+	printf 'canberra_pulse_driver=present\n'
+	printf 'initialstart_backend=distribution-default-hardware\n'
+} >"$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" "$marker"
+trap - EXIT HUP INT TERM

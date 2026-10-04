@@ -1,0 +1,7 @@
+[org_kde_powerdevil]
+# Plasma 6.3 binds a tablet's physical power key to the one-way
+# "Turn Off Screen" action. That action cannot wake an already blanked
+# mobile panel. Keep the key on PowerDevil's normal PowerOff action instead;
+# on mobile its standard profile action is ToggleScreenOnOff.
+PowerOff=Power Off,none,Power Off
+Turn Off Screen=none,Power Off,Turn Off Screen

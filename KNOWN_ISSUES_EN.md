@@ -1,40 +1,24 @@
-# Known issues
+# Features and limitations
 
-[简体中文](KNOWN_ISSUES.md) | **English**
+[简体中文](KNOWN_ISSUES.md) | English
 
-The following applies to the current developer preview:
+This is the live-device test scope, not acceptance of a current complete bundle.
 
-- Automated regression evidence comes from one 128-GB device and does not mean
-  every current artifact received a full rerun. There is no second-device or
-  64-GB hardware acceptance.
-- SMS send/receive, incoming/outgoing calls, ringing, receiver, loudspeaker,
-  switching and uplink microphone have passed on one carrier/SIM. This path
-  depends on carrier IMS/VoLTE and does not imply support on other networks.
-  Call mute is not accepted yet, and speakerphone currently retains the
-  handset-microphone route, so far-field pickup and echo control may be weaker
-  than Flyme. Emergency calling is untested and the screen fingerprint reader
-  is unsupported.
-- The base locks passwords and contains no SSH key; the quick path requires an
-  existing owner public key. There is no graphical account-creation wizard and
-  the desktop logs in automatically. Its user belongs to `docker`, which grants
-  effective root-equivalent host control; treat physical access as access to a
-  developer device.
-- Desktop boot is normally about one minute and may take longer during firmware retries.
-- Full UFS runtime-PM level 3 causes hard hangs, so safe AH8 and explicit suspend are used.
-- Shutdown with USB power attached may restart Linux; there is no charge-only off-mode UI.
-- Charging is limited to the verified 5-V path; proprietary mCharge/24-W is disabled.
-- Speaker playback works but is quieter than Flyme maximum.
-- Phosh 0.56 has a narrow bottom-edge hit area for closing landscape quick settings.
-- Stevia is verified for English input; Chinese input switching is not a release gate.
-- Docker Engine, Compose and common network/storage paths are accepted with
-  arm64 containers. This does not provide transparent x86-container emulation
-  or turn the phone into a KVM-backed desktop VM platform.
-- One 8-GiB sparse serves 64/128-GB models. Online growth is verified on 128-GB;
-  64-GB has fail-closed boundary checks but no independent hardware evidence.
-- Kernel and EDK2 sources and inputs are auditable. Actions performs semantic
-  and ABI acceptance and records actual hashes, but different hosts may still
-  produce different kernel, module, System.map or EDK2 bytes. The public base
-  lacks a complete package-by-package rebuild path from an empty directory.
+| Feature | Evidence and limitations |
+|---|---|
+| Desktop, display, touch | Plasma Mobile, FD630 hardware rendering, touch, brightness and blank/wake have device evidence. Some desktop applications do not fit narrow screens. |
+| Sensors | Accelerometer, rotation, light and proximity have test evidence. Rotation behavior can vary by application. |
+| Networking | 2.4/5 GHz Wi-Fi and LTE data tested. Each device reads its own factory WLAN identity; no shared owner MAC is shipped. |
+| Calls and SMS | SMS, incoming/outgoing calls and receiver/speaker/microphone tested with one carrier/SIM. Other carriers and emergency calls are unverified. |
+| Bluetooth | HID pairing/reconnection tested. This does not establish support for every headset or peripheral. |
+| Audio and video | Speaker, recording and call routes tested. Venus H.264 decoding is limited to integrated application paths, not every browser or codec. |
+| USB and charging | Host gamepad and bounded charge-through tested. Conservative 5 V charging; no stock 24 W fast-charge claim. |
+| Docker and gaming | Docker, RetroArch and Gamescope have test evidence. Steam/translation compatibility and performance vary; no games or accounts are included. |
+| Storage | Installation/expansion tested on 128 GB hardware. 64 GB has logic tests only. Unexpected power loss has caused ext4 damage; keep backups. |
+| Suspend | Manual and automatic suspend are disabled by default. Long suspend/resume remains unreliable. Screen-off keeps the system running; phone-level battery life is not achieved. |
+| Camera, fingerprint, NFC | No usable camera release; fingerprint and NFC are unsupported. |
+| Overclocking | Public GPU default is 710 MHz. CPU uses hardware-defined states. Device-specific tuning is not a stability guarantee for other units. |
 
-Treat [publication status](PUBLICATION_STATUS_EN.md) as the current support
-contract. Do not infer support for anything not explicitly listed as passed.
+Initial setup and some settings pages may have upstream layout limitations.
+Encrypted KWallet may require unlocking once per session with automatic login.
+Plaintext login passwords are not saved to bypass this.

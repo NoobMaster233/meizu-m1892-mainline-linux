@@ -1,0 +1,15 @@
+[Unit]
+Description=M1892 persistent userdata first-boot validation and expansion
+DefaultDependencies=no
+After=local-fs.target systemd-remount-fs.service
+Before=display-manager.service
+ConditionPathExists=!/var/lib/m1892/persistent-first-boot.pass
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/persistent-first-boot
+RemainAfterExit=yes
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

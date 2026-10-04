@@ -1,0 +1,26 @@
+[Unit]
+Description=M1892 read-only factory sensor calibration import
+Requires=dev-disk-by\x2dpartlabel-persist.device
+After=dev-disk-by\x2dpartlabel-persist.device local-fs.target
+Before=hexagonrpcd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/import-persist-sensors --install
+RemainAfterExit=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateMounts=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/usr/share/qcom/sdm845/Meizu/m1892/sensors /run
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+
+[Install]
+WantedBy=multi-user.target

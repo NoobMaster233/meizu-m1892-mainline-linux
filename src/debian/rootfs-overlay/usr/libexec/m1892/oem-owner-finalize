@@ -1,0 +1,118 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail() { echo "M1892_OEM_OWNER_FINALIZE_FAIL: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || fail not-root
+owner=${1:-}
+case "$owner" in ''|root|m1892-live|m1892-setup) fail invalid-owner ;; esac
+[ "${#owner}" -le 31 ] || fail invalid-owner-length
+printf '%s\n' "$owner" | grep -Eq '^[a-z_][a-z0-9_-]*[$]?$' || fail invalid-owner
+state_dir=/var/lib/m1892
+marker=$state_dir/oem-owner-created
+pending=$state_dir/oem-owner-pending
+done_marker=$state_dir/oem-setup-cleanup.pass
+
+pending_matches()
+{
+	[ -f "$pending" ] && [ "$(wc -l <"$pending")" = 5 ] &&
+		grep -Fxc 'result=pending' "$pending" | grep -Fxq 1 &&
+		grep -Fxc 'account_mode=oem-owner' "$pending" | grep -Fxq 1 &&
+		grep -Fxc "owner=$owner" "$pending" | grep -Fxq 1 &&
+		grep -Fxc 'owner_preexisting=no' "$pending" | grep -Fxq 1 &&
+		grep -Fxc 'state=before-user-create' "$pending" | grep -Fxq 1
+}
+done_matches()
+{
+	[ -f "$done_marker" ] && [ "$(wc -l <"$done_marker")" = 3 ] &&
+		grep -Fxc 'result=pass' "$done_marker" | grep -Fxq 1 &&
+		grep -Fxc "owner=$owner" "$done_marker" | grep -Fxq 1 &&
+		grep -Fxc 'setup_user=removed' "$done_marker" | grep -Fxq 1
+}
+[ -e "$marker" ] || pending_matches || fail pending-transaction
+entry=$(getent passwd "$owner") || fail owner-absent
+uid=$(printf '%s\n' "$entry" | cut -d: -f3)
+gid=$(printf '%s\n' "$entry" | cut -d: -f4)
+home=$(printf '%s\n' "$entry" | cut -d: -f6)
+shell=$(printf '%s\n' "$entry" | cut -d: -f7)
+case "$uid" in ''|*[!0-9]*) fail invalid-owner-uid ;; esac
+[ "$uid" -ge 1000 ] && [ "$uid" -lt 65534 ] || fail owner-uid-range
+[ "$gid" -ge 1000 ] && [ "$gid" -lt 65534 ] || fail owner-gid-range
+[ "$home" = "/home/$owner" ] && [ "$shell" = /bin/bash ] || fail owner-account-shape
+[ -d "$home" ] && [ "$(stat -c %U:%G "$home")" = "$owner:$owner" ] &&
+	[ "$(stat -c %a "$home")" = 700 ] || fail owner-home
+status=$(passwd -S "$owner" | awk '{print $2}')
+[ "$status" = P ] || fail owner-password
+for group in users sudo audio video input render netdev bluetooth docker; do
+	id -nG "$owner" | tr ' ' '\n' | grep -Fxq "$group" || fail "owner-group:$group"
+done
+root_hash=$(getent shadow root | cut -d: -f2)
+case "$root_hash" in '!'*|'*'*) ;; *) fail root-not-locked ;; esac
+conf=/etc/sddm.conf.d/90-m1892-oem-account.conf
+[ -f "$conf" ] || fail sddm-config
+[ "$(grep -c '^User=' "$conf")" -le 1 ] || fail sddm-user-count
+sddm_user=$(sed -n 's/^User=//p' "$conf")
+case "$sddm_user" in
+	"$owner") owner_autologin=yes ;;
+	'') owner_autologin=no ;;
+	m1892-setup)
+		owner_autologin=yes
+		;;
+	*) fail sddm-owner ;;
+esac
+grep -Eq '^Session=plasma-mobile(\.desktop)?$' "$conf" || fail sddm-session
+
+install -d -m 0755 -o 0 -g 0 "$state_dir"
+tmp=$state_dir/.oem-owner-created.$$
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+{
+	printf 'result=pass\n'
+	printf 'account_mode=oem-owner\n'
+	printf 'owner=%s\n' "$owner"
+	printf 'uid=%s\n' "$uid"
+	printf 'autologin=%s\n' "$owner_autologin"
+	printf 'state=created-awaiting-reboot\n'
+} >"$tmp"
+chmod 0644 "$tmp"
+[ ! -e "$marker" ] || cmp -s "$tmp" "$marker" || pending_matches ||
+	fail owner-marker-conflict
+if [ -e "$done_marker" ]; then
+	cmp -s "$tmp" "$marker" && done_matches || fail cleanup-marker-conflict
+	[ ! -e "$pending" ] && ! getent passwd m1892-setup >/dev/null 2>&1 &&
+		[ ! -e /etc/polkit-1/rules.d/49-m1892-oem-setup.rules ] &&
+		[ ! -e /etc/xdg/autostart/m1892-oem-account-setup.desktop ] &&
+		[ ! -e /usr/lib/sysusers.d/m1892-oem-setup.conf ] &&
+		grep -Fxq 'NoDisplay=true' /usr/local/share/applications/calamares.desktop &&
+		grep -Fxq 'Hidden=true' /usr/local/share/applications/calamares.desktop ||
+		fail cleanup-state-incomplete
+	systemctl disable m1892-oem-setup-recovery.service \
+		m1892-oem-setup-cleanup.service >/dev/null
+	rm -f "$tmp"
+	trap - EXIT HUP INT TERM
+	echo M1892_OEM_OWNER_FINALIZE_PASS
+	exit 0
+fi
+if [ "$sddm_user" = m1892-setup ]; then
+	conf_tmp=$conf.tmp.$$
+	sed "s/^User=m1892-setup$/User=$owner/" "$conf" >"$conf_tmp"
+	chmod 0644 "$conf_tmp"
+	sync -f "$conf_tmp"
+	mv "$conf_tmp" "$conf"
+	sync -f "$(dirname "$conf")"
+fi
+systemctl enable m1892-stage3-acceptance.service m1892-stage6-acceptance.service \
+	m1892-oem-setup-cleanup.service >/dev/null
+if [ ! -e "$marker" ] || ! cmp -s "$tmp" "$marker"; then
+	sync -f "$tmp"
+	mv "$tmp" "$marker"
+	sync -f "$state_dir"
+else
+	rm -f "$tmp"
+fi
+if [ -e "$pending" ]; then
+	pending_matches || fail pending-conflict
+	rm -f "$pending"
+	sync -f "$state_dir"
+fi
+trap - EXIT HUP INT TERM
+echo M1892_OEM_OWNER_FINALIZE_PASS

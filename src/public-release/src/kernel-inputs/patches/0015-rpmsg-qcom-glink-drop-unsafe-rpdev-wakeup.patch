@@ -1,0 +1,29 @@
+From: M1892 mainline bring-up <m1892@example.com>
+Subject: [PATCH] rpmsg: qcom_glink: drop unsafe rpdev wakeup dereference
+
+qcom_glink_rx_data() may receive a complete packet after the channel exists
+but before an rpmsg device has been attached to its endpoint.  The downstream
+wakeup call then dereferences channel->ept.rpdev unconditionally and panics in
+interrupt context.  The upstream implementation does not contain this wakeup
+call; align with it and retain qcom_glink_rx_done() as the completion path.
+
+---
+ drivers/rpmsg/qcom_glink_native.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/drivers/rpmsg/qcom_glink_native.c b/drivers/rpmsg/qcom_glink_native.c
+index b1fcc98f3ddd..49a2a906b9be 100644
+--- a/drivers/rpmsg/qcom_glink_native.c
++++ b/drivers/rpmsg/qcom_glink_native.c
+@@ -1005,9 +1005,6 @@ static int qcom_glink_rx_data(struct qcom_glink *glink, size_t avail)
+ 		channel->buf = NULL;
+ 
+ 		qcom_glink_rx_done(glink, channel, intent);
+-
+-		pm_wakeup_ws_event(channel->ept.rpdev->dev.power.wakeup, 0,
+-				   true);
+ 	}
+ 
+ advance_rx:
+-- 
+2.43.0

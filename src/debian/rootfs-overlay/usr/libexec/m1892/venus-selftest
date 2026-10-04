@@ -1,0 +1,60 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+state=/run/m1892-venus-selftest
+power=/sys/bus/platform/devices/aa00000.video-codec/power
+fail() { echo "M1892_VENUS_SELFTEST_FAIL: $*" >&2; exit 1; }
+wait_suspended()
+{
+	for _ in $(seq 1 80); do
+		[ "$(cat "$power/runtime_status" 2>/dev/null)" != suspended ] || return 0
+		sleep 0.25
+	done
+	return 1
+}
+
+[ "$(id -u)" = 0 ] || fail root-required
+[ "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = "Meizu 16th Plus (M1892)" ] ||
+	fail wrong-hardware
+[ "$(uname -r)" = 7.1.0-rc1-sdm845 ] || fail wrong-kernel
+command -v v4l2-ctl >/dev/null || fail v4l2-ctl-absent
+command -v gst-launch-1.0 >/dev/null || fail gst-launch-absent
+[ -d "$power" ] || fail venus-power-device-absent
+wait_suspended || fail not-initially-suspended
+
+encoder=
+decoder=
+for sysnode in /sys/class/video4linux/video*; do
+	[ -r "$sysnode/name" ] || continue
+	node=/dev/$(basename "$sysnode")
+	case $(cat "$sysnode/name") in
+		qcom-venus-encoder) encoder=$node ;;
+		qcom-venus-decoder) decoder=$node ;;
+	esac
+done
+[ -n "$encoder" ] || fail encoder-node-absent
+[ -n "$decoder" ] || fail decoder-node-absent
+
+rm -rf "$state"
+install -d -m 0700 "$state"
+before=$(dmesg | wc -l)
+active_before=$(cat "$power/runtime_active_time")
+GST_DEBUG_NO_COLOR=1 GST_DEBUG=2 gst-launch-1.0 -e \
+	videotestsrc num-buffers=30 pattern=smpte ! \
+	video/x-raw,format=NV12,width=128,height=96,framerate=30/1 ! \
+	v4l2h264enc ! v4l2h264dec ! fakesink sync=false \
+	>"$state/gstreamer-roundtrip.log" 2>&1 ||
+	fail gstreamer-h264-roundtrip
+active_after=$(cat "$power/runtime_active_time")
+[ "$active_after" -gt "$active_before" ] || fail venus-active-time-unchanged
+wait_suspended || fail no-suspend-after-roundtrip
+
+dmesg | tail -n "+$((before + 1))" >"$state/kernel-delta.log"
+if grep -Eiq 'Unable to handle kernel|Kernel panic|Oops:|BUG:|IOMMU.*fault|qcom-venus.*(fail|error|timeout)' "$state/kernel-delta.log"; then
+	fail critical-kernel-log
+fi
+printf 'encoder=%s\ndecoder=%s\nframes=30\ngstreamer_h264_roundtrip=pass\nruntime_active_delta_ms=%s\nfinal_runtime_status=suspended\n' \
+	"$encoder" "$decoder" "$((active_after - active_before))" >"$state/result"
+cat "$state/result"
+echo M1892_VENUS_SELFTEST_PASS

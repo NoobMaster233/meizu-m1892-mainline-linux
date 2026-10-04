@@ -1,0 +1,17 @@
+[Unit]
+Description=M1892 MPSS start and WLAN registration
+Requires=m1892-radio-modules.service rmtfs.service tqftpserv.service qrtr-ns.service
+After=m1892-radio-modules.service rmtfs.service tqftpserv.service qrtr-ns.service
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -ec 'set -- /sys/bus/platform/devices/4080000.remoteproc/remoteproc/remoteproc*/state; test "$$#" -eq 1; case "$$(cat "$$1")" in offline) echo start >"$$1";; running) :;; *) exit 1;; esac'
+ExecStart=/usr/bin/sleep 3
+ExecStart=/bin/sh -ec 'set -- /sys/bus/platform/devices/4080000.remoteproc/remoteproc/remoteproc*/state; test "$$#" -eq 1; test "$$(cat "$$1")" = running'
+ExecStart=/usr/sbin/modprobe ath10k_snoc
+RemainAfterExit=yes
+TimeoutStartSec=45
+
+[Install]
+WantedBy=multi-user.target

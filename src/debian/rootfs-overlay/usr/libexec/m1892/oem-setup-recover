@@ -1,0 +1,98 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail() { echo "M1892_OEM_SETUP_RECOVERY_FAIL: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || fail not-root
+grep -Fxq 'account_mode=oem-owner' /etc/m1892-rootfs-identity || exit 0
+
+install -d -m 0755 -o 0 -g 0 /var/lib/m1892
+marker=/var/lib/m1892/oem-owner-created
+done_marker=/var/lib/m1892/oem-setup-cleanup.pass
+pending=/var/lib/m1892/oem-owner-pending
+candidates=/run/m1892-oem-owner-candidates.$$
+trap 'rm -f "$candidates"' EXIT HUP INT TERM
+getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 { print $1 }' >"$candidates"
+count=$(wc -l <"$candidates")
+
+pending_matches()
+{
+	owner=$1
+	[ -f "$pending" ] && [ "$(wc -l <"$pending")" = 5 ] &&
+		grep -Fxc 'result=pending' "$pending" | grep -Fxq 1 &&
+		grep -Fxc 'account_mode=oem-owner' "$pending" | grep -Fxq 1 &&
+		grep -Fxc "owner=$owner" "$pending" | grep -Fxq 1 &&
+		grep -Fxc 'owner_preexisting=no' "$pending" | grep -Fxq 1 &&
+		grep -Fxc 'state=before-user-create' "$pending" | grep -Fxq 1
+}
+
+reset_completion_state()
+{
+	systemctl disable m1892-stage3-acceptance.service m1892-stage6-acceptance.service \
+		m1892-oem-setup-cleanup.service >/dev/null 2>&1 || true
+	rm -f "$marker" "$done_marker" "$pending"
+	sync -f /var/lib/m1892
+}
+
+restore_setup()
+{
+	systemd-sysusers /usr/lib/sysusers.d/m1892-oem-setup.conf >/dev/null
+	getent passwd m1892-setup >/dev/null || fail setup-user-absent
+	conf=/etc/sddm.conf.d/90-m1892-oem-account.conf
+	tmp=$conf.tmp.$$
+	cat >"$tmp" <<'EOF'
+[Autologin]
+User=m1892-setup
+Session=plasma-mobile.desktop
+Relogin=true
+EOF
+		chmod 0644 "$tmp"
+		sync -f "$tmp"
+		mv "$tmp" "$conf"
+		sync -f "$(dirname "$conf")"
+	}
+
+case "$count" in
+	0)
+		[ ! -e "$marker" ] || fail owner-marker-without-owner
+		if [ -e "$pending" ]; then
+			pending_owner=$(sed -n 's/^owner=//p' "$pending")
+			pending_matches "$pending_owner" || fail invalid-pending-without-owner
+			reset_completion_state
+		fi
+		restore_setup
+		printf 'state=fresh-setup\n' >/var/lib/m1892/oem-setup-recovery.log
+		;;
+	1)
+		owner=$(cat "$candidates")
+		if /usr/libexec/m1892/oem-owner-finalize "$owner"; then
+			/usr/libexec/m1892/oem-setup-cleanup
+			printf 'state=resumed-complete\nowner=%s\n' "$owner" \
+				>/var/lib/m1892/oem-setup-recovery.log
+		elif pending_matches "$owner"; then
+			entry=$(getent passwd "$owner") || fail partial-owner-disappeared
+			home=$(printf '%s\n' "$entry" | cut -d: -f6)
+			[ "$home" = "/home/$owner" ] || fail partial-owner-home
+			userdel "$owner" || fail partial-owner-delete
+			if getent group "$owner" >/dev/null; then
+				groupdel "$owner" || fail partial-owner-group-delete
+			fi
+			if [ -d "$home" ]; then
+				find "$home" -xdev -depth -delete
+			fi
+			rm -f /etc/sudoers.d/10-installer "/var/lib/AccountsService/users/$owner"
+			reset_completion_state
+			restore_setup
+			printf 'state=partial-owner-rolled-back\n' \
+				>/var/lib/m1892/oem-setup-recovery.log
+		else
+			fail unowned-regular-account
+		fi
+		;;
+	*) fail multiple-owner-candidates ;;
+esac
+
+chmod 0600 /var/lib/m1892/oem-setup-recovery.log
+trap - EXIT HUP INT TERM
+rm -f "$candidates"
+echo M1892_OEM_SETUP_RECOVERY_PASS

@@ -1,0 +1,1291 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -u
+
+# This helper is deliberately explicit: no systemd unit starts it.  Its normal
+# mode is read-only.  --mobile-only temporarily deactivates only Wi-Fi
+# connections that were active at entry and restores those exact UUIDs on all
+# handled normal, failure, and signal paths.  Fixed JSONL records are used so no
+# IMSI, telephone number, address, DNS server, connection UUID, or Wi-Fi name is
+# copied into acceptance output.
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+umask 077
+
+schema=m1892-cellular-acceptance/v1
+mode=default
+timeout_seconds=45
+profile=/etc/NetworkManager/system-connections/m1892-cellular.nmconnection
+provider_db=/usr/share/mobile-broadband-provider-info/serviceproviders.xml
+ordinary_if=
+ims_if=
+mm_service=org.freedesktop.ModemManager1
+mm_modem_iface=org.freedesktop.ModemManager1.Modem
+mm_3gpp_iface=org.freedesktop.ModemManager1.Modem.Modem3gpp
+mm_bearer_iface=org.freedesktop.ModemManager1.Bearer
+failures=0
+final_emitted=no
+wifi_restore_required=no
+wifi_uuids=
+wifi_restore_deadline=0
+signal_received=no
+configuration_ok=no
+data_readiness_ok=no
+ims_readiness_ok=no
+e2e_attempted=no
+e2e_passed=no
+
+usage()
+{
+	cat >&2 <<'EOF'
+usage: cellular-acceptance [--mobile-only] [--timeout SECONDS]
+       cellular-acceptance --self-test
+
+Default mode performs no network state changes.  --mobile-only temporarily
+disconnects active Wi-Fi, refuses to run while any remote SSH session is active,
+performs interface-bound mobile-data probes, and restores the prior Wi-Fi
+connections before returning.
+EOF
+}
+
+emit_check()
+{
+	# Check names and results are internal constants, never runtime data.
+	printf '{"schema":"%s","check":"%s","result":"%s"}\n' \
+		"$schema" "$1" "$2"
+}
+
+pass_check()
+{
+	emit_check "$1" PASS
+}
+
+fail_check()
+{
+	failures=$((failures + 1))
+	emit_check "$1" FAIL
+}
+
+report_flag()
+{
+	if [ "$2" = yes ]; then
+		pass_check "$1"
+	else
+		fail_check "$1"
+	fi
+}
+
+report_diagnostic()
+{
+	if [ "$2" = yes ]; then
+		diagnostic_result=PASS
+	else
+		diagnostic_result=FAIL
+	fi
+	printf '{"schema":"%s","check":"%s","result":"%s","role":"diagnostic"}\n' \
+		"$schema" "$1" "$diagnostic_result"
+}
+
+contains_exact_line()
+{
+	printf '%s\n' "$1" | grep -Fxq -- "$2"
+}
+
+dbus_uint()
+{
+	value=$(busctl --system --auto-start=no get-property "$mm_service" "$1" "$2" "$3" \
+		2>/dev/null) || return 1
+	set -- $value
+	[ "$#" -eq 2 ] && [ "$1" = u ] || return 1
+	case $2 in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	printf '%s\n' "$2"
+}
+
+dbus_string()
+{
+	value=$(busctl --system --auto-start=no get-property "$mm_service" "$1" "$2" "$3" \
+		2>/dev/null) || return 1
+	case $value in
+		's "'*'"')
+			value=${value#s \"}
+			value=${value%\"}
+			printf '%s\n' "$value"
+			;;
+		*) return 1 ;;
+	esac
+}
+
+dbus_true()
+{
+	[ "$(busctl --system --auto-start=no get-property "$mm_service" "$1" "$2" "$3" \
+		2>/dev/null || true)" = 'b true' ]
+}
+
+modem_paths()
+{
+	busctl --system --auto-start=no --list tree "$mm_service" 2>/dev/null |
+		sed -n '\#^/org/freedesktop/ModemManager1/Modem/[0-9][0-9]*$#p'
+}
+
+bearer_paths()
+{
+	value=$(busctl --system --auto-start=no get-property "$mm_service" "$1" \
+		"$mm_modem_iface" Bearers 2>/dev/null) || return 1
+	printf '%s\n' "$value" | tr '"' '\n' |
+		sed -n '\#^/org/freedesktop/ModemManager1/Bearer/[0-9][0-9]*$#p'
+}
+
+connected_bearer_for_interface()
+{
+	target=$1
+	paths=$(bearer_paths "$modem_path" 2>/dev/null || true)
+	for bearer_path in $paths; do
+		dbus_true "$bearer_path" "$mm_bearer_iface" Connected || continue
+		bearer_if=$(dbus_string "$bearer_path" "$mm_bearer_iface" Interface \
+			2>/dev/null || true)
+		[ "$bearer_if" = "$target" ] && return 0
+	done
+	return 1
+}
+
+valid_qmap_interface()
+{
+	printf '%s\n' "$1" | grep -Eq '^qmapmux[0-9]+\.[0-9]+$'
+}
+
+connected_interface_for_apn()
+{
+	target_apn=$1
+	paths=$(bearer_paths "$modem_path" 2>/dev/null || true)
+	for bearer_path in $paths; do
+		dbus_true "$bearer_path" "$mm_bearer_iface" Connected || continue
+		bearer_info=$(mmcli -b "$bearer_path" --output-keyvalue 2>/dev/null || true)
+		bearer_apn=$(printf '%s\n' "$bearer_info" |
+			sed -n 's/^bearer\.properties\.apn[[:space:]]*: //p' |
+			tr '[:upper:]' '[:lower:]')
+		[ "$bearer_apn" = "$target_apn" ] || continue
+		bearer_if=$(dbus_string "$bearer_path" "$mm_bearer_iface" Interface \
+			2>/dev/null || true)
+		valid_qmap_interface "$bearer_if" || continue
+		printf '%s\n' "$bearer_if"
+		return 0
+	done
+	return 1
+}
+
+has_ipv4()
+{
+	ip -4 -o address show dev "$1" scope global 2>/dev/null |
+		awk '$0 !~ / tentative([[:space:]]|$)| dadfailed([[:space:]]|$)/ { found=1 }
+			END { exit found ? 0 : 1 }'
+}
+
+has_global_ipv6()
+{
+	ip -6 -o address show dev "$1" scope global 2>/dev/null |
+		awk '$0 !~ / tentative([[:space:]]|$)| dadfailed([[:space:]]|$)/ { found=1 }
+			END { exit found ? 0 : 1 }'
+}
+
+route_uses_interface()
+{
+	route=$1
+	target_if=$2
+	previous=
+	for field in $route; do
+		if [ "$previous" = dev ]; then
+			[ "$field" = "$target_if" ]
+			return
+		fi
+		previous=$field
+	done
+	return 1
+}
+
+main_default_absent_for_interface()
+{
+	target_if=$1
+	defaults=$(ip -6 route show table main default dev "$target_if" 2>/dev/null) ||
+		return 1
+	[ -z "$defaults" ]
+}
+
+value_is_zero()
+{
+	[ "$1" = 0 ]
+}
+
+sysctl_is_zero()
+{
+	path=$1
+	[ -r "$path" ] || return 1
+	value=
+	if ! IFS= read -r value <"$path"; then
+		# procfs/sysctl pseudo-files may expose a value without a trailing
+		# newline, which makes POSIX read return non-zero after setting it.
+		[ -n "$value" ] || return 1
+	fi
+	value_is_zero "$value"
+}
+
+monotonic_now()
+{
+	value=$(awk 'NR == 1 { print int($1); found=1; exit }
+		END { if (!found) exit 1 }' /proc/uptime 2>/dev/null) || return 1
+	case $value in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	printf '%s\n' "$value"
+}
+
+registration_is_usable()
+{
+	# HOME, ROAMING, and their CSFB-not-preferred variants are registered.
+	case $1 in
+		1|5|9|10) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+access_has_lte()
+{
+	case $1 in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ $(( $1 & 16384 )) -ne 0 ]
+}
+
+active_wifi_uuids()
+{
+	query_deadline=$1
+	raw_connections=$(bounded_nmcli_query "$query_deadline" \
+		-t -e no -f UUID,TYPE connection show --active 2>/dev/null) || return 1
+	printf '%s\n' "$raw_connections" |
+		awk -F: '$2 == "wifi" || $2 == "802-11-wireless" {
+			if ($1 ~ /^[0123456789abcdefABCDEF-]+$/ && length($1) == 36)
+				print $1
+			else
+				invalid=1
+		}
+		END { exit invalid ? 1 : 0 }'
+}
+
+connection_uuid_is_active()
+{
+	query_deadline=$1
+	query_uuid=$2
+	state=$(bounded_nmcli_query "$query_deadline" \
+		-g GENERAL.STATE connection show uuid "$query_uuid" 2>/dev/null) || return 1
+	case $state in
+		activated*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+remaining_budget_seconds()
+{
+	budget_deadline=$1
+	budget_cap=$2
+	case $budget_deadline in ''|*[!0-9]*) return 1 ;; esac
+	case $budget_cap in ''|*[!0-9]*) return 1 ;; esac
+	budget_now=$(monotonic_now 2>/dev/null) || return 1
+	budget_remaining=$((budget_deadline - budget_now))
+	# Reserve the two-second SIGKILL grace used by coreutils timeout.  This
+	# keeps the command and its kill grace inside the shared hard deadline.
+	[ "$budget_remaining" -gt 2 ] || return 1
+	budget_seconds=$((budget_remaining - 2))
+	[ "$budget_seconds" -le "$budget_cap" ] || budget_seconds=$budget_cap
+	[ "$budget_seconds" -gt 0 ] || return 1
+	printf '%s\n' "$budget_seconds"
+}
+
+bounded_nmcli_query()
+{
+	query_deadline=$1
+	shift
+	bounded_command "$query_deadline" 15 nmcli "$@"
+}
+
+bounded_command()
+{
+	command_deadline=$1
+	command_cap=$2
+	shift 2
+	command_budget=$(remaining_budget_seconds "$command_deadline" "$command_cap") ||
+		return 1
+	timeout -k 2 "$command_budget" "$@"
+}
+
+restore_wifi()
+{
+	[ "$wifi_restore_required" = yes ] || return 0
+	restore_ok=yes
+	restore_deadline=$wifi_restore_deadline
+	case $restore_deadline in
+		''|*[!0-9]*|0) return 1 ;;
+	esac
+	for wifi_uuid in $wifi_uuids; do
+		if restore_budget=$(remaining_budget_seconds "$restore_deadline" 30); then
+			if ! timeout -k 2 "$restore_budget" nmcli --wait "$restore_budget" \
+					connection up uuid "$wifi_uuid" >/dev/null 2>&1; then
+				restore_ok=no
+			fi
+		else
+			restore_ok=no
+			break
+		fi
+	done
+	if [ "$restore_ok" = yes ]; then
+		for wifi_uuid in $wifi_uuids; do
+			connection_uuid_is_active "$restore_deadline" "$wifi_uuid" ||
+				restore_ok=no
+		done
+	fi
+	if [ "$restore_ok" = yes ]; then
+		wifi_restore_required=no
+		return 0
+	fi
+	return 1
+}
+
+on_signal()
+{
+	signal_received=yes
+	exit 130
+}
+
+on_exit()
+{
+	status=$?
+	trap - EXIT
+	# A second ordinary signal must not interrupt rollback.  SIGKILL and power
+	# loss cannot be trapped, so callers must retain an independent console.
+	trap '' HUP INT QUIT TERM PIPE
+	restore_result=not-needed
+	if [ "$wifi_restore_required" = yes ]; then
+		if restore_wifi; then
+			restore_result=PASS
+		else
+			restore_result=FAIL
+		fi
+	fi
+	if [ "$final_emitted" = no ]; then
+		if [ "$restore_result" != not-needed ]; then
+			emit_check wifi_restore "$restore_result"
+		fi
+		if [ "$signal_received" = yes ]; then
+			emit_check interrupted FAIL
+		else
+			emit_check unexpected_exit FAIL
+		fi
+		if [ "$configuration_ok" = yes ]; then
+			exit_configuration_result=PASS
+		else
+			exit_configuration_result=FAIL
+		fi
+		set -- $(data_summary "$mode" "$e2e_attempted" "$e2e_passed" \
+			"$data_readiness_ok")
+		exit_data_scope=$1
+		exit_data_result=$2
+		if [ "$ims_readiness_ok" = yes ]; then
+			exit_ims_result=PASS
+		else
+			exit_ims_result=FAIL
+		fi
+		printf '{"schema":"%s","mode":"%s","result":"FAIL","configuration_result":"%s","data_scope":"%s","data_result":"%s","ims_scope":"runtime-readiness-not-telephony-e2e","ims_readiness_result":"%s"}\n' \
+			"$schema" "$mode" "$exit_configuration_result" "$exit_data_scope" \
+			"$exit_data_result" "$exit_ims_result"
+	fi
+	exit "$status"
+}
+
+data_summary()
+{
+	summary_mode=$1
+	summary_attempted=$2
+	summary_passed=$3
+	summary_ready=$4
+	if [ "$summary_mode" = mobile-only ] && [ "$summary_attempted" = yes ]; then
+		if [ "$summary_passed" = yes ]; then
+			printf '%s %s\n' mobile-internet-e2e PASS
+		else
+			printf '%s %s\n' mobile-internet-e2e FAIL
+		fi
+	elif [ "$summary_mode" = mobile-only ]; then
+		printf '%s %s\n' mobile-internet-e2e-not-run FAIL
+	elif [ "$summary_ready" = yes ]; then
+		printf '%s %s\n' runtime-readiness PASS
+	else
+		printf '%s %s\n' runtime-readiness FAIL
+	fi
+}
+
+finish()
+{
+	final_emitted=yes
+	if [ "$failures" -eq 0 ]; then
+		result=PASS
+		status=0
+	else
+		result=FAIL
+		status=1
+	fi
+	if [ "$configuration_ok" = yes ]; then
+		configuration_result=PASS
+	else
+		configuration_result=FAIL
+	fi
+	set -- $(data_summary "$mode" "$e2e_attempted" "$e2e_passed" \
+		"$data_readiness_ok")
+	data_scope=$1
+	data_result=$2
+	if [ "$ims_readiness_ok" = yes ]; then
+		ims_result=PASS
+	else
+		ims_result=FAIL
+	fi
+	printf '{"schema":"%s","mode":"%s","result":"%s","configuration_result":"%s","data_scope":"%s","data_result":"%s","ims_scope":"runtime-readiness-not-telephony-e2e","ims_readiness_result":"%s"}\n' \
+		"$schema" "$mode" "$result" "$configuration_result" "$data_scope" \
+		"$data_result" "$ims_result"
+	if [ "$wifi_restore_required" = no ]; then
+		trap - HUP INT QUIT TERM PIPE EXIT
+	fi
+	exit "$status"
+}
+
+self_test()
+{
+	self_failures=0
+	if contains_exact_line 'qmapmux0.0
+qmapmux0.1' qmapmux0.1; then
+		emit_check selftest_exact_line PASS
+	else
+		emit_check selftest_exact_line FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	if valid_qmap_interface qmapmux0.0 && valid_qmap_interface qmapmux27.1 &&
+		! valid_qmap_interface qmapmux.1 && ! valid_qmap_interface wlan0; then
+		emit_check selftest_qmap_interface PASS
+	else
+		emit_check selftest_qmap_interface FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	if route_uses_interface \
+		'1.1.1.1 via 192.0.2.1 dev qmapmux0.0 src 192.0.2.2 uid 0' \
+		qmapmux0.0 &&
+		! route_uses_interface \
+			'1.1.1.1 via 192.0.2.1 dev wlan0 src 192.0.2.2 uid 0' \
+			qmapmux0.0; then
+		emit_check selftest_route_parser PASS
+	else
+		emit_check selftest_route_parser FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	if registration_is_usable 1 && registration_is_usable 5 &&
+		! registration_is_usable 2; then
+		emit_check selftest_registration_enum PASS
+	else
+		emit_check selftest_registration_enum FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	mock_ip_fixture=empty
+	ip()
+	{
+		case $mock_ip_fixture in
+			empty) return 0 ;;
+			present) printf '%s\n' 'default via 2001:db8::1 dev qmapmux0.1'; return 0 ;;
+			error) return 1 ;;
+		esac
+		return 1
+	}
+	if main_default_absent_for_interface qmapmux0.1 &&
+		mock_ip_fixture=present &&
+		! main_default_absent_for_interface qmapmux0.1 &&
+		mock_ip_fixture=error &&
+		! main_default_absent_for_interface qmapmux0.1; then
+		emit_check selftest_main_default_absence_fail_closed PASS
+	else
+		emit_check selftest_main_default_absence_fail_closed FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	if value_is_zero 0 && ! value_is_zero 1 && ! value_is_zero ''; then
+		emit_check selftest_exact_zero_parser PASS
+	else
+		emit_check selftest_exact_zero_parser FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	if access_has_lte 16384 && access_has_lte 16386 &&
+		! access_has_lte 512; then
+		emit_check selftest_lte_mask PASS
+	else
+		emit_check selftest_lte_mask FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	if [ "$(data_summary mobile-only no no yes)" = \
+		'mobile-internet-e2e-not-run FAIL' ] &&
+		[ "$(data_summary mobile-only yes yes yes)" = \
+		'mobile-internet-e2e PASS' ] &&
+		[ "$(data_summary mobile-only yes no yes)" = \
+		'mobile-internet-e2e FAIL' ] &&
+		[ "$(data_summary default no no yes)" = 'runtime-readiness PASS' ]; then
+		emit_check selftest_data_scope PASS
+	else
+		emit_check selftest_data_scope FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	# Static command fixtures prove that every NetworkManager query is bounded,
+	# timeout is fail-closed, and rollback clears its flag only after an
+	# independently bounded activation-state query succeeds.
+	mock_nmcli_up_calls=0
+	mock_timeout_fixture=pass
+	mock_wifi_fixture=valid
+	monotonic_now() { printf '%s\n' 1000; }
+	timeout()
+	{
+		[ "$1" = -k ] && [ "$2" = 2 ] || return 1
+		shift 2
+		case $1 in ''|*[!0-9]*) return 1 ;; esac
+		shift
+		case $mock_timeout_fixture:$* in
+			snapshot-timeout:*'UUID,TYPE connection show --active'*) return 124 ;;
+			state-timeout:*'GENERAL.STATE connection show uuid'*) return 124 ;;
+			route-timeout:'ip -4 route get '*) return 124 ;;
+		esac
+		"$@"
+	}
+	nmcli()
+	{
+		case $* in
+			*'UUID,TYPE connection show --active'*)
+				case $mock_wifi_fixture in
+					valid)
+						printf '%s\n' \
+							'00000000-0000-0000-0000-000000000001:wifi' \
+							'00000000-0000-0000-0000-000000000002:ethernet'
+						return 0
+						;;
+					invalid)
+						printf '%s\n' 'not-a-uuid:wifi'
+						return 0
+						;;
+					*) return 1 ;;
+				esac
+				;;
+			*'connection up uuid'*)
+				mock_nmcli_up_calls=$((mock_nmcli_up_calls + 1))
+				return 0
+				;;
+			*'GENERAL.STATE connection show uuid'*)
+				printf '%s\n' activated
+				return 0
+				;;
+		esac
+		return 1
+	}
+	valid_wifi=$(active_wifi_uuids 1010 2>/dev/null || true)
+	mock_wifi_fixture=invalid
+	if [ "$valid_wifi" = 00000000-0000-0000-0000-000000000001 ] &&
+		! active_wifi_uuids 1010 >/dev/null 2>&1; then
+		emit_check selftest_wifi_snapshot_fail_closed PASS
+	else
+		emit_check selftest_wifi_snapshot_fail_closed FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	mock_wifi_fixture=valid
+	mock_timeout_fixture=snapshot-timeout
+	if ! active_wifi_uuids 1010 >/dev/null 2>&1; then
+		emit_check selftest_wifi_query_timeout_fail_closed PASS
+	else
+		emit_check selftest_wifi_query_timeout_fail_closed FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	mock_timeout_fixture=pass
+	if ! active_wifi_uuids 1002 >/dev/null 2>&1; then
+		emit_check selftest_wifi_query_deadline_fail_closed PASS
+	else
+		emit_check selftest_wifi_query_deadline_fail_closed FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	mock_ip_fixture=present
+	mock_timeout_fixture=route-timeout
+	if ! bounded_command 1010 5 ip -4 route get 1.1.1.1 >/dev/null 2>&1; then
+		emit_check selftest_route_query_timeout_fail_closed PASS
+	else
+		emit_check selftest_route_query_timeout_fail_closed FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	mock_timeout_fixture=pass
+	wifi_uuids=00000000-0000-0000-0000-000000000001
+	wifi_restore_required=yes
+	wifi_restore_deadline=1015
+	if restore_wifi && [ "$mock_nmcli_up_calls" -eq 1 ] &&
+		[ "$wifi_restore_required" = no ]; then
+		emit_check selftest_wifi_bounded_restore PASS
+	else
+		emit_check selftest_wifi_bounded_restore FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	wifi_restore_required=yes
+	wifi_restore_deadline=1015
+	mock_timeout_fixture=state-timeout
+	if ! restore_wifi && [ "$wifi_restore_required" = yes ]; then
+		emit_check selftest_wifi_restore_query_timeout_fail_closed PASS
+	else
+		emit_check selftest_wifi_restore_query_timeout_fail_closed FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	mock_timeout_fixture=pass
+	wifi_restore_deadline=1002
+	up_calls_before_expired_restore=$mock_nmcli_up_calls
+	if ! restore_wifi && [ "$wifi_restore_required" = yes ] &&
+		[ "$mock_nmcli_up_calls" -eq "$up_calls_before_expired_restore" ]; then
+		emit_check selftest_wifi_restore_deadline_fail_closed PASS
+	else
+		emit_check selftest_wifi_restore_deadline_fail_closed FAIL
+		self_failures=$((self_failures + 1))
+	fi
+	wifi_restore_required=no
+	if [ "$self_failures" -eq 0 ]; then
+		printf '{"schema":"%s","mode":"self-test","result":"PASS"}\n' "$schema"
+		return 0
+	fi
+	printf '{"schema":"%s","mode":"self-test","result":"FAIL"}\n' "$schema"
+	return 1
+}
+
+while [ "$#" -gt 0 ]; do
+	case $1 in
+		--mobile-only)
+			mode=mobile-only
+			shift
+			;;
+		--timeout)
+			[ "$#" -ge 2 ] || { usage; exit 2; }
+			timeout_seconds=$2
+			case $timeout_seconds in
+				''|*[!0-9]*) usage; exit 2 ;;
+			esac
+			[ "$timeout_seconds" -le 300 ] || { usage; exit 2; }
+			shift 2
+			;;
+		--self-test)
+			[ "$#" -eq 1 ] || { usage; exit 2; }
+			self_test
+			exit $?
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+		*)
+			usage
+			exit 2
+			;;
+	esac
+done
+
+trap on_exit EXIT
+trap on_signal HUP INT QUIT TERM PIPE
+
+if [ "$(id -u)" -eq 0 ]; then
+	pass_check root_privilege
+else
+	fail_check root_privilege
+	finish
+fi
+
+missing_command=no
+for command_name in awk busctl busybox dpkg dpkg-query grep id ip loginctl \
+	mmcli nmcli python3 sed sleep ss stat systemctl timeout tr; do
+	command -v "$command_name" >/dev/null 2>&1 || missing_command=yes
+done
+report_flag required_commands "$([ "$missing_command" = no ] && printf yes || printf no)"
+[ "$missing_command" = no ] || finish
+
+device_identity=no
+model=
+if [ -r /sys/firmware/devicetree/base/model ]; then
+	model=$(tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true)
+fi
+[ "$model" = 'Meizu 16th Plus (M1892)' ] && device_identity=yes
+report_flag device_identity "$device_identity"
+
+os_identity=no
+if grep -Fxq 'ID=debian' /etc/os-release 2>/dev/null &&
+	grep -Eq '^VERSION_ID="?13"?$' /etc/os-release 2>/dev/null; then
+	os_identity=yes
+fi
+report_flag debian_13 "$os_identity"
+
+profile_semantics_ok=no
+if [ -f "$profile" ] &&
+	[ "$(nmcli -g connection.id connection show m1892-cellular 2>/dev/null || true)" = \
+		m1892-cellular ] &&
+	[ "$(nmcli -g connection.type connection show m1892-cellular 2>/dev/null || true)" = gsm ] &&
+	[ "$(nmcli -g connection.autoconnect connection show m1892-cellular 2>/dev/null || true)" = yes ] &&
+	[ "$(nmcli -g connection.autoconnect-priority connection show m1892-cellular \
+		2>/dev/null || true)" = -10 ] &&
+	[ "$(nmcli -g connection.autoconnect-retries connection show m1892-cellular \
+		2>/dev/null || true)" = 0 ] &&
+	[ "$(nmcli -g ipv4.method connection show m1892-cellular 2>/dev/null || true)" = auto ] &&
+	[ "$(nmcli -g ipv4.route-metric connection show m1892-cellular 2>/dev/null || true)" = 1200 ] &&
+	[ "$(nmcli -g ipv6.method connection show m1892-cellular 2>/dev/null || true)" = auto ] &&
+	[ "$(nmcli -g ipv6.route-metric connection show m1892-cellular 2>/dev/null || true)" = 1200 ] &&
+	! grep -Eiq '^(apn|username|password|password-flags|pin)=' "$profile"; then
+	profile_semantics_ok=yes
+fi
+report_flag carrier_neutral_profile_semantics "$profile_semantics_ok"
+
+profile_mode_ok=no
+[ "$(stat -c %a "$profile" 2>/dev/null || true)" = 600 ] && profile_mode_ok=yes
+report_flag carrier_neutral_profile_mode_0600 "$profile_mode_ok"
+
+profile_owner_ok=no
+[ "$(stat -c %u:%g "$profile" 2>/dev/null || true)" = 0:0 ] && profile_owner_ok=yes
+report_flag carrier_neutral_profile_root_owner "$profile_owner_ok"
+
+provider_package_ok=no
+[ "$(dpkg-query -W -f='${Status}' mobile-broadband-provider-info 2>/dev/null || true)" = \
+	'install ok installed' ] && provider_package_ok=yes
+report_flag provider_database_package "$provider_package_ok"
+
+provider_integrity_ok=no
+provider_verify=
+if [ -s "$provider_db" ]; then
+	provider_verify_status=no
+	if provider_verify=$(dpkg --verify mobile-broadband-provider-info 2>/dev/null); then
+		provider_verify_status=yes
+	fi
+	if [ "$provider_verify_status" = yes ] && [ -z "$provider_verify" ] &&
+		python3 - "$provider_db" >/dev/null 2>&1 <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+if root.tag != "serviceproviders":
+    raise SystemExit(1)
+PY
+	then
+		provider_integrity_ok=yes
+	fi
+fi
+report_flag provider_database_integrity "$provider_integrity_ok"
+
+if [ "$device_identity" = yes ] && [ "$os_identity" = yes ] &&
+	[ "$profile_semantics_ok" = yes ] && [ "$profile_mode_ok" = yes ] &&
+	[ "$profile_owner_ok" = yes ] && [ "$provider_package_ok" = yes ] &&
+	[ "$provider_integrity_ok" = yes ]; then
+	configuration_ok=yes
+fi
+
+networkmanager_active=no
+modemmanager_active=no
+systemctl is-active --quiet NetworkManager.service 2>/dev/null && networkmanager_active=yes
+systemctl is-active --quiet ModemManager.service 2>/dev/null && modemmanager_active=yes
+report_flag networkmanager_service "$networkmanager_active"
+report_flag modemmanager_service "$modemmanager_active"
+
+# Poll the complete dual-bearer readiness predicate once per second.  This does
+# not activate, disconnect, reset, or rewrite any cellular state.
+elapsed=0
+runtime_ready=no
+modem_path=
+modem_count=0
+registration_ok=no
+packet_attached=no
+lte_access=no
+nm_profile_active=no
+nm_profile_type_ok=no
+nm_profile_interface_ok=no
+ordinary_bearer_connected=no
+ordinary_link=no
+ordinary_ipv4=no
+ordinary_ipv6=no
+ordinary_dns=no
+ordinary_if=
+ims_bearer_connected=no
+ims_if=
+ims_link=no
+ims_ipv6=no
+ims_main_default_absent=no
+ims_ra_default_disabled=no
+voltd_active=no
+imsd_active=no
+q6voiced_active=no
+
+while [ "$networkmanager_active" = yes ] && [ "$modemmanager_active" = yes ]; do
+	ordinary_if=
+	ims_if=
+	paths=$(modem_paths 2>/dev/null || true)
+	modem_count=$(printf '%s\n' "$paths" | sed '/^$/d' | awk 'END { print NR + 0 }')
+	modem_path=$(printf '%s\n' "$paths" | sed -n '1p')
+
+	registration_ok=no
+	packet_attached=no
+	lte_access=no
+	if [ "$modem_count" -eq 1 ] && [ -n "$modem_path" ]; then
+		registration=$(dbus_uint "$modem_path" "$mm_3gpp_iface" \
+			RegistrationState 2>/dev/null || true)
+		packet_state=$(dbus_uint "$modem_path" "$mm_3gpp_iface" \
+			PacketServiceState 2>/dev/null || true)
+		access_technologies=$(dbus_uint "$modem_path" "$mm_modem_iface" \
+			AccessTechnologies 2>/dev/null || true)
+		registration_is_usable "$registration" && registration_ok=yes
+		[ "$packet_state" = 2 ] && packet_attached=yes
+		access_has_lte "$access_technologies" && lte_access=yes
+	fi
+
+	nm_profile_active=no
+	nm_profile_type_ok=no
+	nm_profile_interface_ok=no
+	dns_values=
+	nm_state=$(nmcli -g GENERAL.STATE connection show m1892-cellular \
+		2>/dev/null || true)
+	case $nm_state in activated*) nm_profile_active=yes ;; esac
+	[ "$(nmcli -g connection.type connection show m1892-cellular \
+		2>/dev/null || true)" = gsm ] && nm_profile_type_ok=yes
+	# For WWAN, GENERAL.DEVICES is the modem control device (normally qrtr0),
+	# while GENERAL.IP-IFACE on that device is the QMAP data interface.
+	nm_devices=$(nmcli -g GENERAL.DEVICES connection show m1892-cellular \
+		2>/dev/null || true)
+	for nm_device in $nm_devices; do
+		nm_ip_interfaces=$(nmcli -g GENERAL.IP-IFACE device show "$nm_device" \
+			2>/dev/null || true)
+		for nm_ip_interface in $nm_ip_interfaces; do
+			if valid_qmap_interface "$nm_ip_interface"; then
+				ordinary_if=$nm_ip_interface
+				nm_profile_interface_ok=yes
+				break
+			fi
+		done
+		nm_device_dns=$(nmcli -e no -g IP4.DNS,IP6.DNS device show "$nm_device" \
+			2>/dev/null || true)
+		if [ -n "$nm_device_dns" ]; then
+			dns_values=$(printf '%s\n%s\n' "$dns_values" "$nm_device_dns" |
+				sed '/^[[:space:]]*$/d')
+		fi
+	done
+
+	ordinary_bearer_connected=no
+	ims_bearer_connected=no
+	if [ "$modem_count" -eq 1 ] && [ -n "$modem_path" ]; then
+		[ -n "$ordinary_if" ] && connected_bearer_for_interface "$ordinary_if" &&
+			ordinary_bearer_connected=yes
+		ims_if=$(connected_interface_for_apn ims 2>/dev/null || true)
+		[ -n "$ims_if" ] && ims_bearer_connected=yes
+	fi
+
+	ordinary_link=no
+	ordinary_ipv4=no
+	ordinary_ipv6=no
+	ordinary_dns=no
+	[ -n "$ordinary_if" ] && ip link show dev "$ordinary_if" >/dev/null 2>&1 &&
+		ordinary_link=yes
+	[ -n "$ordinary_if" ] && has_ipv4 "$ordinary_if" && ordinary_ipv4=yes
+	[ -n "$ordinary_if" ] && has_global_ipv6 "$ordinary_if" && ordinary_ipv6=yes
+	[ -n "$(printf '%s\n' "$dns_values" | sed '/^[[:space:]]*$/d' | sed -n '1p')" ] &&
+		ordinary_dns=yes
+
+	ims_link=no
+	ims_ipv6=no
+	ims_main_default_absent=no
+	ims_ra_default_disabled=no
+	[ -n "$ims_if" ] && ip link show dev "$ims_if" >/dev/null 2>&1 && ims_link=yes
+	[ -n "$ims_if" ] && has_global_ipv6 "$ims_if" && ims_ipv6=yes
+	[ -n "$ims_if" ] &&
+		sysctl_is_zero "/proc/sys/net/ipv6/conf/$ims_if/accept_ra_defrtr" &&
+		ims_ra_default_disabled=yes
+	if [ -n "$ims_if" ] && main_default_absent_for_interface "$ims_if"; then
+		ims_main_default_absent=yes
+	fi
+	voltd_active=no
+	imsd_active=no
+	q6voiced_active=no
+	systemctl is-active --quiet m1892-81voltd.service 2>/dev/null && voltd_active=yes
+	systemctl is-active --quiet m1892-qcom-imsd.service 2>/dev/null && imsd_active=yes
+	systemctl is-active --quiet m1892-q6voiced.service 2>/dev/null && q6voiced_active=yes
+
+	if [ "$modem_count" -eq 1 ] && [ "$registration_ok" = yes ] &&
+		[ "$packet_attached" = yes ] && [ "$lte_access" = yes ] &&
+		[ "$nm_profile_active" = yes ] && [ "$nm_profile_type_ok" = yes ] &&
+		[ "$nm_profile_interface_ok" = yes ] &&
+		[ "$ordinary_bearer_connected" = yes ] && [ "$ordinary_link" = yes ] &&
+		[ "$ordinary_ipv4" = yes ] && [ "$ordinary_ipv6" = yes ] &&
+		[ "$ordinary_dns" = yes ] && [ "$ims_bearer_connected" = yes ] &&
+		[ "$ims_link" = yes ] && [ "$ims_ipv6" = yes ] &&
+		[ "$ims_ra_default_disabled" = yes ] &&
+		[ "$ims_main_default_absent" = yes ] &&
+		[ "$voltd_active" = yes ] && [ "$imsd_active" = yes ] &&
+		[ "$q6voiced_active" = yes ]; then
+		runtime_ready=yes
+		break
+	fi
+	[ "$elapsed" -ge "$timeout_seconds" ] && break
+	sleep 1
+	elapsed=$((elapsed + 1))
+done
+
+[ "$modem_count" -eq 1 ] && modem_present=yes || modem_present=no
+report_flag single_modem "$modem_present"
+report_flag lte_registration "$registration_ok"
+report_flag packet_service_attached "$packet_attached"
+report_flag lte_access_technology "$lte_access"
+report_flag m1892_cellular_active "$nm_profile_active"
+report_flag m1892_cellular_type_gsm "$nm_profile_type_ok"
+report_flag m1892_cellular_ordinary_ip_interface "$nm_profile_interface_ok"
+report_flag ordinary_bearer_connected "$ordinary_bearer_connected"
+report_flag ordinary_interface_present "$ordinary_link"
+report_flag ordinary_ipv4 "$ordinary_ipv4"
+report_flag ordinary_global_ipv6 "$ordinary_ipv6"
+report_flag ordinary_dns_config "$ordinary_dns"
+report_flag ims_bearer_connected "$ims_bearer_connected"
+report_flag ims_interface_present "$ims_link"
+report_flag ims_global_ipv6 "$ims_ipv6"
+report_flag ims_ra_default_router_acceptance_disabled "$ims_ra_default_disabled"
+report_flag ims_main_table_default_absent "$ims_main_default_absent"
+report_flag m1892_81voltd_active "$voltd_active"
+report_flag m1892_qcom_imsd_active "$imsd_active"
+report_flag m1892_q6voiced_active "$q6voiced_active"
+
+if [ "$networkmanager_active" = yes ] && [ "$modemmanager_active" = yes ] &&
+	[ "$modem_count" -eq 1 ] && [ "$registration_ok" = yes ] &&
+	[ "$packet_attached" = yes ] && [ "$lte_access" = yes ] &&
+	[ "$nm_profile_active" = yes ] && [ "$nm_profile_type_ok" = yes ] &&
+	[ "$nm_profile_interface_ok" = yes ] &&
+	[ "$ordinary_bearer_connected" = yes ] && [ "$ordinary_link" = yes ] &&
+	[ "$ordinary_ipv4" = yes ] && [ "$ordinary_ipv6" = yes ] &&
+	[ "$ordinary_dns" = yes ]; then
+	data_readiness_ok=yes
+fi
+if [ "$data_readiness_ok" = yes ] && [ "$ims_bearer_connected" = yes ] &&
+	[ "$ims_link" = yes ] && [ "$ims_ipv6" = yes ] &&
+	[ "$ims_ra_default_disabled" = yes ] &&
+	[ "$ims_main_default_absent" = yes ] &&
+	[ "$voltd_active" = yes ] && [ "$imsd_active" = yes ] &&
+	[ "$q6voiced_active" = yes ]; then
+	ims_readiness_ok=yes
+fi
+
+[ "$mode" = mobile-only ] || finish
+
+# IMS readiness is not a prerequisite for a mobile-data E2E probe.  The modem,
+# ordinary bearer, dual-stack addresses, and DNS configuration are.
+mobile_precondition=no
+if [ "$device_identity" = yes ] && [ "$os_identity" = yes ] &&
+	[ "$configuration_ok" = yes ] && [ "$data_readiness_ok" = yes ]; then
+	mobile_precondition=yes
+fi
+report_flag mobile_only_precondition "$mobile_precondition"
+[ "$mobile_precondition" = yes ] || finish
+
+# Fail closed rather than risk cutting this or another maintainer's transport.
+# Environment, login1, and established sshd/dropbear sockets cover sudo,
+# systemd-run, and concurrent sessions without printing any peer address.
+remote_session_safe=yes
+if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] ||
+	[ -n "${SSH_TTY:-}" ]; then
+	remote_session_safe=no
+fi
+if session_listing=$(loginctl list-sessions --no-legend 2>/dev/null); then
+	for session_id in $(printf '%s\n' "$session_listing" | awk '{ print $1 }'); do
+		if session_remote=$(loginctl show-session "$session_id" -p Remote --value \
+			2>/dev/null); then
+			[ "$session_remote" = yes ] && remote_session_safe=no
+		else
+			remote_session_safe=no
+		fi
+	done
+else
+	remote_session_safe=no
+fi
+if ssh_sockets=$(ss -H -n -t -p state established 2>/dev/null); then
+	printf '%s\n' "$ssh_sockets" | grep -Eiq 'sshd|dropbear' &&
+		remote_session_safe=no
+else
+	remote_session_safe=no
+fi
+report_flag mobile_only_no_remote_sessions "$remote_session_safe"
+[ "$remote_session_safe" = yes ] || finish
+
+if mobile_started=$(monotonic_now); then
+	pass_check mobile_only_monotonic_clock
+else
+	fail_check mobile_only_monotonic_clock
+	finish
+fi
+mobile_probe_deadline=$((mobile_started + 70))
+# This is a hard deadline shared by normal rollback, retry, and the EXIT trap.
+# No rollback invocation extends it, so an ordinary signal cannot turn cleanup
+# into an unbounded wait even if NetworkManager or D-Bus stops responding.
+wifi_restore_deadline=$((mobile_started + 120))
+if wifi_uuids=$(active_wifi_uuids "$mobile_probe_deadline" 2>/dev/null); then
+	pass_check mobile_only_wifi_snapshot
+else
+	fail_check mobile_only_wifi_snapshot
+	finish
+fi
+wifi_restore_required=yes
+wifi_down_ok=yes
+wifi_down_deadline=$mobile_probe_deadline
+for wifi_uuid in $wifi_uuids; do
+	if wifi_down_budget=$(remaining_budget_seconds "$wifi_down_deadline" 30); then
+		if ! timeout -k 2 "$wifi_down_budget" nmcli --wait "$wifi_down_budget" \
+				connection down uuid "$wifi_uuid" >/dev/null 2>&1; then
+			wifi_down_ok=no
+		fi
+	else
+		wifi_down_ok=no
+	fi
+done
+if remaining_wifi=$(active_wifi_uuids "$mobile_probe_deadline" 2>/dev/null); then
+	[ -z "$remaining_wifi" ] || wifi_down_ok=no
+else
+	wifi_down_ok=no
+fi
+report_flag mobile_only_wifi_isolated "$wifi_down_ok"
+
+if [ "$wifi_down_ok" = yes ]; then
+	e2e_attempted=yes
+	# Wait briefly for policy routes to settle after Wi-Fi leaves.
+	route4_ok=no
+	route6_ok=no
+	route_elapsed=0
+	while :; do
+		route4=
+		route6=
+		if route_value=$(bounded_command "$mobile_probe_deadline" 5 \
+				ip -4 route get 1.1.1.1 2>/dev/null); then
+			route4=$route_value
+		fi
+		if route_value=$(bounded_command "$mobile_probe_deadline" 5 \
+				ip -6 route get 2606:4700:4700::1111 2>/dev/null); then
+			route6=$route_value
+		fi
+		route_uses_interface "$route4" "$ordinary_if" && route4_ok=yes || route4_ok=no
+		route_uses_interface "$route6" "$ordinary_if" && route6_ok=yes || route6_ok=no
+		[ "$route4_ok" = yes ] && [ "$route6_ok" = yes ] && break
+		if [ "$route_elapsed" -ge 15 ] ||
+			[ "$(monotonic_now 2>/dev/null || printf '%s' "$mobile_probe_deadline")" \
+				-ge "$mobile_probe_deadline" ]; then
+			break
+		fi
+		sleep 1
+		route_elapsed=$((route_elapsed + 1))
+	done
+	report_flag mobile_ipv4_route "$route4_ok"
+	report_flag mobile_ipv6_route "$route6_ok"
+
+	# Use only DNS addresses supplied to the ordinary bearer, but never print
+	# them.  The bounded Python probe binds DNS and HTTPS sockets to the current
+	# NetworkManager-owned ordinary QMAP interface; its numeric prefix may change
+	# whenever ModemManager recreates the modem after resume.
+	probe_output=
+	probe_status=1
+	probe_now=$(monotonic_now 2>/dev/null || printf '%s' "$mobile_probe_deadline")
+	probe_remaining=$((mobile_probe_deadline - probe_now))
+	if [ -n "$dns_values" ] && [ "$probe_remaining" -gt 0 ]; then
+		[ "$probe_remaining" -le 35 ] || probe_remaining=35
+		# dns_values contains only NetworkManager-validated numeric addresses.
+		# Intentional word splitting passes each address as a separate argument.
+		# shellcheck disable=SC2086
+		probe_output=$(timeout -k 2 "$probe_remaining" python3 - "$ordinary_if" \
+			$dns_values \
+			2>/dev/null <<'PY'
+import ipaddress
+import os
+import socket
+import ssl
+import struct
+import sys
+import time
+
+interface = sys.argv[1]
+server_texts = sys.argv[2:]
+hostname = "example.com"
+deadline = time.monotonic() + 30
+
+
+def qname(name):
+    return b"".join(bytes((len(label),)) + label.encode("ascii")
+                    for label in name.split(".")) + b"\0"
+
+
+def skip_name(packet, offset):
+    while True:
+        if offset >= len(packet):
+            raise ValueError("truncated name")
+        length = packet[offset]
+        if length & 0xC0 == 0xC0:
+            if offset + 1 >= len(packet):
+                raise ValueError("truncated pointer")
+            return offset + 2
+        offset += 1
+        if length == 0:
+            return offset
+        if length & 0xC0 or offset + length > len(packet):
+            raise ValueError("invalid label")
+        offset += length
+
+
+def remaining(limit):
+    value = deadline - time.monotonic()
+    if value <= 0:
+        raise TimeoutError
+    return min(limit, value)
+
+
+def resolve_a(server_text):
+    server_text = server_text.split("%", 1)[0]
+    server = ipaddress.ip_address(server_text)
+    query_id = struct.unpack("!H", os.urandom(2))[0]
+    query = struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0)
+    query += qname(hostname) + struct.pack("!HH", 1, 1)
+    family = socket.AF_INET6 if server.version == 6 else socket.AF_INET
+    with socket.socket(family, socket.SOCK_DGRAM) as dns_socket:
+        dns_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
+                              interface.encode("ascii") + b"\0")
+        dns_socket.settimeout(remaining(5))
+        if family == socket.AF_INET6:
+            target = (str(server), 53, 0, socket.if_nametoindex(interface))
+        else:
+            target = (str(server), 53)
+        dns_socket.sendto(query, target)
+        packet = dns_socket.recv(4096)
+    if len(packet) < 12:
+        raise ValueError("short DNS reply")
+    reply = struct.unpack("!HHHHHH", packet[:12])
+    reply_id, flags, questions, answers = reply[:4]
+    if (reply_id != query_id or not flags & 0x8000 or flags & 0x000F or
+            questions != 1):
+        raise ValueError("invalid DNS reply")
+    offset = 12
+    for _ in range(questions):
+        offset = skip_name(packet, offset)
+        if offset + 4 > len(packet):
+            raise ValueError("short DNS question")
+        offset += 4
+    addresses = []
+    for _ in range(answers):
+        offset = skip_name(packet, offset)
+        if offset + 10 > len(packet):
+            raise ValueError("short DNS answer")
+        answer = struct.unpack("!HHIH", packet[offset:offset + 10])
+        answer_type, answer_class, _, length = answer
+        offset += 10
+        if offset + length > len(packet):
+            raise ValueError("short DNS record")
+        if answer_type == 1 and answer_class == 1 and length == 4:
+            addresses.append(socket.inet_ntop(socket.AF_INET,
+                                              packet[offset:offset + 4]))
+        offset += length
+    return addresses
+
+
+addresses = []
+for server_text in server_texts:
+    try:
+        addresses = resolve_a(server_text)
+    except (OSError, ValueError, TimeoutError, struct.error):
+        continue
+    if addresses:
+        break
+if not addresses:
+    raise SystemExit(10)
+print("dns=PASS", flush=True)
+
+tls_context = ssl.create_default_context()
+for address in addresses:
+    raw_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tls_socket = None
+    try:
+        raw_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
+                              interface.encode("ascii") + b"\0")
+        raw_socket.settimeout(remaining(10))
+        raw_socket.connect((address, 443))
+        tls_socket = tls_context.wrap_socket(raw_socket, server_hostname=hostname)
+        tls_socket.settimeout(remaining(10))
+        request = ("GET / HTTP/1.1\r\nHost: example.com\r\n"
+                   "User-Agent: m1892-cellular-acceptance/1\r\n"
+                   "Connection: close\r\n\r\n")
+        tls_socket.sendall(request.encode("ascii"))
+        response = b""
+        while b"\r\n" not in response and len(response) < 4096:
+            chunk = tls_socket.recv(512)
+            if not chunk:
+                break
+            response += chunk
+        status_line = response.split(b"\r\n", 1)[0].split()
+        status = int(status_line[1]) if len(status_line) >= 2 else 0
+        if 200 <= status < 400:
+            print("http=PASS")
+            raise SystemExit(0)
+    except (OSError, ValueError, TimeoutError, ssl.SSLError):
+        pass
+    finally:
+        if tls_socket is not None:
+            tls_socket.close()
+        else:
+            raw_socket.close()
+raise SystemExit(20)
+PY
+		)
+		probe_status=$?
+	fi
+	contains_exact_line "$probe_output" dns=PASS && dns_e2e=yes || dns_e2e=no
+	if [ "$probe_status" -eq 0 ] && contains_exact_line "$probe_output" http=PASS; then
+		http_e2e=yes
+	else
+		http_e2e=no
+	fi
+	report_flag mobile_dns_e2e "$dns_e2e"
+	report_flag mobile_https_e2e "$http_e2e"
+	if [ "$route4_ok" = yes ] && [ "$route6_ok" = yes ] &&
+		[ "$dns_e2e" = yes ] && [ "$http_e2e" = yes ]; then
+		e2e_passed=yes
+	fi
+
+	# ICMP is useful diagnostics but operators may filter it.  Run it only
+	# after the DNS+certificate-valid HTTPS E2E gate so it cannot consume that
+	# gate's time budget or turn a proven HTTP path into a false failure.
+	ping4_ok=no
+	ping6_ok=no
+	probe_now=$(monotonic_now 2>/dev/null || printf '%s' "$mobile_probe_deadline")
+	probe_remaining=$((mobile_probe_deadline - probe_now))
+	if [ "$probe_remaining" -gt 0 ]; then
+		[ "$probe_remaining" -le 8 ] || probe_remaining=8
+		timeout -k 2 "$probe_remaining" busybox ping -4 -I "$ordinary_if" \
+			-c 3 -W 2 1.1.1.1 >/dev/null 2>&1 && ping4_ok=yes
+	fi
+	probe_now=$(monotonic_now 2>/dev/null || printf '%s' "$mobile_probe_deadline")
+	probe_remaining=$((mobile_probe_deadline - probe_now))
+	if [ "$probe_remaining" -gt 0 ]; then
+		[ "$probe_remaining" -le 8 ] || probe_remaining=8
+		timeout -k 2 "$probe_remaining" busybox ping -6 -I "$ordinary_if" \
+			-c 3 -W 2 2606:4700:4700::1111 >/dev/null 2>&1 && ping6_ok=yes
+	fi
+	report_diagnostic mobile_numeric_ipv4_ping "$ping4_ok"
+	report_diagnostic mobile_numeric_ipv6_ping "$ping6_ok"
+else
+	fail_check mobile_ipv4_route
+	fail_check mobile_ipv6_route
+	report_diagnostic mobile_numeric_ipv4_ping no
+	report_diagnostic mobile_numeric_ipv6_ping no
+	fail_check mobile_dns_e2e
+	fail_check mobile_https_e2e
+fi
+
+# Restore before the final result.  Retry once; the EXIT trap makes one last
+# best-effort attempt if both synchronous restorations fail.
+if restore_wifi; then
+	wifi_restore_ok=yes
+else
+	sleep 2
+	restore_wifi && wifi_restore_ok=yes || wifi_restore_ok=no
+fi
+report_flag wifi_restore "$wifi_restore_ok"
+
+finish

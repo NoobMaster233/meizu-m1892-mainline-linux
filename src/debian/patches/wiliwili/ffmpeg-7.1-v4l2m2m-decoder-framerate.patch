@@ -1,0 +1,42 @@
+diff --git a/libavcodec/v4l2_m2m_dec.c b/libavcodec/v4l2_m2m_dec.c
+--- a/libavcodec/v4l2_m2m_dec.c
++++ b/libavcodec/v4l2_m2m_dec.c
+@@ -102,6 +102,29 @@
+     return 0;
+ }
+ 
++static void v4l2_set_timeperframe(AVCodecContext *avctx,
++                                  V4L2m2mContext *s)
++{
++    struct v4l2_streamparm parm = { 0 };
++
++    if (avctx->framerate.num <= 0 || avctx->framerate.den <= 0)
++        return;
++
++    parm.type = V4L2_TYPE_IS_MULTIPLANAR(s->output.type) ?
++                V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE :
++                V4L2_BUF_TYPE_VIDEO_OUTPUT;
++    parm.parm.output.timeperframe.numerator = avctx->framerate.den;
++    parm.parm.output.timeperframe.denominator = avctx->framerate.num;
++
++    if (ioctl(s->fd, VIDIOC_S_PARM, &parm) < 0)
++        av_log(avctx, AV_LOG_WARNING,
++               "Failed to set decoder timeperframe: %s\n",
++               av_err2str(AVERROR(errno)));
++    else
++        av_log(avctx, AV_LOG_VERBOSE, "Decoder timeperframe: %d/%d\n",
++               avctx->framerate.den, avctx->framerate.num);
++}
++
+ static int v4l2_prepare_decoder(V4L2m2mContext *s)
+ {
+     struct v4l2_event_subscription sub;
+@@ -212,6 +235,8 @@
+         return ret;
+     }
+ 
++    v4l2_set_timeperframe(avctx, s);
++
+     return v4l2_prepare_decoder(s);
+ }
+ 

@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+[ "$(id -u)" = 0 ] || exit 1
+caller_uid=${PKEXEC_UID:-}
+case "$caller_uid" in ''|*[!0-9]*) exit 1 ;; esac
+[ "$(getent passwd "$caller_uid" | cut -d: -f1)" = m1892-setup ] || exit 1
+runtime=/run/user/$caller_uid
+[ -d "$runtime" ] || exit 1
+export XDG_RUNTIME_DIR=$runtime
+export DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus
+export WAYLAND_DISPLAY=wayland-0
+export QT_QPA_PLATFORM=wayland
+# Qt 6 does not support rendering with a global scale factor below one.  The
+# M1892 Calamares branding uses its supported fullscreen layout instead; the
+# official Widgets users module avoids the QQuickWindow focus boundary.
+unset QT_SCALE_FACTOR QT_SCREEN_SCALE_FACTORS
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+exec /usr/bin/calamares -c /usr/share/m1892/calamares-oem

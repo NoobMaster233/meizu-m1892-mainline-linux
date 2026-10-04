@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Launch the native ARM64 Steam client in one nested Gamescope gaming session.
+set -euo pipefail
+
+steam_launcher=/usr/local/bin/steam-arm64
+gamescope_bin=/usr/local/bin/gamescope
+mangoapp_bin=/usr/local/bin/mangoapp
+config_file=/etc/default/steam-gamescope-arm64
+
+if [[ ! -x "$steam_launcher" ]]; then
+    printf 'Steam ARM64 launcher not found: %s\n' "$steam_launcher" >&2
+    exit 1
+fi
+
+if [[ ! -x "$gamescope_bin" ]]; then
+    printf 'Gamescope not found: %s\n' "$gamescope_bin" >&2
+    exit 1
+fi
+
+# URI and control requests must be forwarded to the running client instead of
+# creating a second nested compositor.
+if pgrep -u "$(id -u)" -x steam >/dev/null 2>&1; then
+    exec "$steam_launcher" "$@"
+fi
+
+if [[ "${1:-}" == "-shutdown" || "${1:-}" == "--shutdown" ]]; then
+    exit 0
+fi
+
+# The nested resolution belongs to Gamescope, not to Steam's display panel.
+# Keep a conservative 720p default for the A630 and allow a root-controlled
+# Debian configuration file to change the next gaming session.
+env_game_width=${M1892_GAMESCOPE_GAME_WIDTH:-}
+env_game_height=${M1892_GAMESCOPE_GAME_HEIGHT:-}
+env_output_width=${M1892_GAMESCOPE_OUTPUT_WIDTH:-}
+env_output_height=${M1892_GAMESCOPE_OUTPUT_HEIGHT:-}
+env_scaler=${M1892_GAMESCOPE_SCALER:-}
+env_filter=${M1892_GAMESCOPE_FILTER:-}
+env_sharpness=${M1892_GAMESCOPE_SHARPNESS:-}
+env_gamescope_cpuset=${M1892_GAMESCOPE_CPUSET:-}
+env_steam_cpuset=${M1892_STEAM_CPUSET:-}
+env_game_affinity_mask=${M1892_STEAM_GAME_AFFINITY_MASK:-}
+env_mangoapp_config=${M1892_MANGOAPP_CONFIG:-}
+
+if [[ -r "$config_file" ]]; then
+    # shellcheck source=/dev/null
+    source "$config_file"
+fi
+
+[[ -n "$env_game_width" ]] && M1892_GAMESCOPE_GAME_WIDTH=$env_game_width
+[[ -n "$env_game_height" ]] && M1892_GAMESCOPE_GAME_HEIGHT=$env_game_height
+[[ -n "$env_output_width" ]] && M1892_GAMESCOPE_OUTPUT_WIDTH=$env_output_width
+[[ -n "$env_output_height" ]] && M1892_GAMESCOPE_OUTPUT_HEIGHT=$env_output_height
+[[ -n "$env_scaler" ]] && M1892_GAMESCOPE_SCALER=$env_scaler
+[[ -n "$env_filter" ]] && M1892_GAMESCOPE_FILTER=$env_filter
+[[ -n "$env_sharpness" ]] && M1892_GAMESCOPE_SHARPNESS=$env_sharpness
+[[ -n "$env_gamescope_cpuset" ]] && M1892_GAMESCOPE_CPUSET=$env_gamescope_cpuset
+[[ -n "$env_steam_cpuset" ]] && M1892_STEAM_CPUSET=$env_steam_cpuset
+[[ -n "$env_game_affinity_mask" ]] && M1892_STEAM_GAME_AFFINITY_MASK=$env_game_affinity_mask
+[[ -n "$env_mangoapp_config" ]] && M1892_MANGOAPP_CONFIG=$env_mangoapp_config
+
+game_width=${M1892_GAMESCOPE_GAME_WIDTH:-1280}
+game_height=${M1892_GAMESCOPE_GAME_HEIGHT:-720}
+output_width=${M1892_GAMESCOPE_OUTPUT_WIDTH:-2160}
+output_height=${M1892_GAMESCOPE_OUTPUT_HEIGHT:-1080}
+scaler=${M1892_GAMESCOPE_SCALER:-fit}
+filter=${M1892_GAMESCOPE_FILTER:-linear}
+sharpness=${M1892_GAMESCOPE_SHARPNESS:-5}
+gamescope_cpuset=${M1892_GAMESCOPE_CPUSET:-}
+steam_cpuset=${M1892_STEAM_CPUSET:-}
+game_affinity_mask=${M1892_STEAM_GAME_AFFINITY_MASK:-}
+mangoapp_config=${M1892_MANGOAPP_CONFIG:-}
+
+validate_dimension() {
+    local name=$1 value=$2
+    if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 320 || value > 8192 )); then
+        printf 'Invalid %s in %s: %s\n' "$name" "$config_file" "$value" >&2
+        exit 2
+    fi
+}
+
+validate_dimension M1892_GAMESCOPE_GAME_WIDTH "$game_width"
+validate_dimension M1892_GAMESCOPE_GAME_HEIGHT "$game_height"
+validate_dimension M1892_GAMESCOPE_OUTPUT_WIDTH "$output_width"
+validate_dimension M1892_GAMESCOPE_OUTPUT_HEIGHT "$output_height"
+case "$scaler" in
+    auto|integer|fit|fill|stretch) ;;
+    *)
+        printf 'Invalid M1892_GAMESCOPE_SCALER in %s: %s\n' "$config_file" "$scaler" >&2
+        exit 2
+        ;;
+esac
+case "$filter" in
+    linear|nearest|fsr|nis|pixel|sgsr) ;;
+    *)
+        printf 'Invalid M1892_GAMESCOPE_FILTER in %s: %s\n' "$config_file" "$filter" >&2
+        exit 2
+        ;;
+esac
+if [[ ! "$sharpness" =~ ^[0-9]+$ ]] || (( sharpness > 20 )); then
+    printf 'Invalid M1892_GAMESCOPE_SHARPNESS in %s: %s\n' "$config_file" "$sharpness" >&2
+    exit 2
+fi
+for cpuset in "$gamescope_cpuset" "$steam_cpuset"; do
+    case "$cpuset" in
+        ''|0-3|4-7|0-7) ;;
+        *)
+            printf 'Invalid M1892 CPU set in %s: %s\n' "$config_file" "$cpuset" >&2
+            exit 2
+            ;;
+    esac
+done
+case "$game_affinity_mask" in
+    ''|0x0f|0xf0|0xff) ;;
+    *)
+        printf 'Invalid M1892 Steam game affinity mask in %s: %s\n' \
+            "$config_file" "$game_affinity_mask" >&2
+        exit 2
+        ;;
+esac
+if [[ ( -n "$gamescope_cpuset" || -n "$steam_cpuset" ) && ! -x /usr/bin/taskset ]]; then
+    printf 'Configured CPU set requires /usr/bin/taskset\n' >&2
+    exit 2
+fi
+# This launcher owns the scaler/filter through Gamescope's command-line API.
+# Steam's -steamos3 mode publishes its own default GAMESCOPE_NEW_SCALING_*
+# values and overrides -S/-F.  Gamepad UI does not need that mode in this
+# nested desktop session, so deliberately omit it rather than repairing atoms.
+gamescope_command=("$gamescope_bin")
+steam_command=(/usr/bin/env -u STEAM_GAMESCOPE_FANCY_SCALING_SUPPORT \
+    "$steam_launcher" -gamepadui "$@")
+if [[ -n "$gamescope_cpuset" ]]; then
+    gamescope_command=(/usr/bin/taskset -c "$gamescope_cpuset" "$gamescope_bin")
+fi
+if [[ -n "$steam_cpuset" ]]; then
+    steam_command=(/usr/bin/env -u STEAM_GAMESCOPE_FANCY_SCALING_SUPPORT \
+        /usr/bin/taskset -c "$steam_cpuset" "$steam_launcher" -gamepadui "$@")
+fi
+if [[ -n "$game_affinity_mask" ]]; then
+    # Valve's native ARM64 steam-launch-wrapper applies this affinity mask to
+    # every launched app before exec.  It separates games from the Steam/CEF
+    # client without a per-game VDF edit or a polling daemon.
+    export STEAM_LAUNCH_WRAPPER_AFFINITY_LIST=$game_affinity_mask
+fi
+
+filter_args=(-F "$filter")
+if [[ "$filter" == fsr || "$filter" == nis || "$filter" == sgsr ]]; then
+    filter_args+=(--sharpness "$sharpness")
+fi
+
+mangoapp_args=()
+if [[ -x "$mangoapp_bin" ]]; then
+    mangoapp_args+=(--mangoapp)
+    if [[ -n "$mangoapp_config" ]]; then
+        export MANGOHUD_CONFIG=$mangoapp_config
+    fi
+else
+    printf 'MangoApp not installed; starting Gamescope without performance HUD support\n' >&2
+fi
+
+exec /usr/bin/systemd-inhibit \
+    --what=idle \
+    --who="Steam Gamescope" \
+    --why="Active gaming session" \
+    --mode=block \
+    "${gamescope_command[@]}" \
+    --backend wayland \
+    -e \
+    -f \
+    -W "$output_width" -H "$output_height" \
+    -w "$game_width" -h "$game_height" \
+    -S "$scaler" \
+    "${filter_args[@]}" \
+    "${mangoapp_args[@]}" \
+    -- "${steam_command[@]}"

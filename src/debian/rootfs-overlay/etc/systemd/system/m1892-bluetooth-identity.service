@@ -1,0 +1,21 @@
+[Unit]
+Description=M1892 factory Bluetooth identity
+BindsTo=sys-subsystem-bluetooth-devices-hci0.device
+Requires=m1892-radio-online.service
+Wants=bluetooth.service
+After=sys-subsystem-bluetooth-devices-hci0.device m1892-radio-online.service bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/bluetooth-identity
+RemainAfterExit=yes
+TimeoutStartSec=30
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

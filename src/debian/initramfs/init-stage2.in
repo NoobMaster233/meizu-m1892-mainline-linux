@@ -1,0 +1,415 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: MIT
+set -u
+
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export PATH
+/bin/busybox --install -s /bin
+
+archive=/run/m1892-debian13-stage2-rootfs.ext4.gz
+ready=${archive}.ready
+expected_bytes=@ROOTFS_BYTES@
+expected_sha256=@ROOTFS_SHA256@
+root_image=/run/m1892-debian13-stage2-rootfs.ext4
+expected_image_bytes=@ROOTFS_IMAGE_BYTES@
+expected_image_sha256=@ROOTFS_IMAGE_SHA256@
+expected_panel_sha256=@PANEL_MODULE_SHA256@
+root_mode=@ROOT_MODE@
+persistent_uuid=@PERSISTENT_UUID@
+persistent_label=@PERSISTENT_LABEL@
+panel_module=/lib/modules/m1892-panel/panel-samsung-sofef00m.ko
+newroot=/newroot
+
+mkdir -p /dev /proc /sys /run /tmp "$newroot" /sys/kernel/debug \
+	/sys/kernel/config /sys/fs/pstore
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+mount -t tmpfs -o mode=0755,nodev,nosuid tmpfs /run 2>/dev/null || true
+mount -t tmpfs -o mode=1777,nodev,nosuid tmpfs /tmp 2>/dev/null || true
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
+mount -t configfs configfs /sys/kernel/config 2>/dev/null || true
+mount -t pstore pstore /sys/fs/pstore 2>/dev/null || true
+
+log()
+{
+	message="m1892-debian-stage2-initramfs: $*"
+	echo "$message" >/dev/console 2>/dev/null || true
+	echo "$message" >/dev/kmsg 2>/dev/null || true
+	echo "$message" >/dev/pmsg0 2>/dev/null || true
+}
+
+cmdline_value()
+{
+	key=$1
+	# The kernel command line is a space-delimited list.
+	# shellcheck disable=SC2046
+	set -- $(cat /proc/cmdline 2>/dev/null || true)
+	for item do
+		case "$item" in "$key"=*) echo "${item#*=}"; return 0 ;; esac
+	done
+	return 1
+}
+
+platform_driver_name()
+{
+	path=/sys/bus/platform/devices/$1/driver
+	[ -L "$path" ] || { echo none; return 0; }
+	target=$(readlink -f "$path" 2>/dev/null || true)
+	echo "${target##*/}"
+}
+
+probe_platform_device()
+{
+	device=$1
+	path=/sys/bus/platform/devices/$device
+	[ -e "$path" ] || return 1
+	[ ! -L "$path/driver" ] || return 0
+	printf '%s\n' "$device" >/sys/bus/platform/drivers_probe 2>/dev/null || true
+	[ -L "$path/driver" ]
+}
+
+bind_platform_device()
+{
+	device=$1
+	driver=$2
+	path=/sys/bus/platform/devices/$device
+	driver_path=/sys/bus/platform/drivers/$driver
+	[ -e "$path" ] || { log "platform absent device=$device"; return 1; }
+	[ ! -L "$path/driver" ] || return 0
+	[ -w "$driver_path/bind" ] || {
+		log "platform driver unavailable device=$device driver=$driver"
+		return 1
+	}
+	printf '%s\n' "$device" >"$driver_path/bind" 2>/dev/null || true
+	[ -L "$path/driver" ] || {
+		log "platform remains unbound device=$device driver=$driver"
+		return 1
+	}
+	log "platform bound device=$device driver=$(platform_driver_name "$device")"
+}
+
+bring_up_storage_read_only()
+{
+	probe_platform_device 100000.clock-controller || true
+	probe_platform_device 179c0000.rsc:clock-controller || true
+	bind_platform_device 179c0000.rsc:regulators-0 qcom-rpmh-regulator || return 1
+	sleep 1
+	probe_platform_device 784000.qfprom || true
+	bind_platform_device 88e2000.phy qcom-qusb2-phy || true
+	sleep 1
+	probe_platform_device a6f8800.usb || true
+	sleep 1
+	bind_platform_device 1d87000.phy qcom-qmp-ufs-phy || return 1
+	sleep 1
+	bind_platform_device 1d84000.ufshc ufshcd-qcom || return 1
+	attempt=0
+	while [ "$attempt" -lt 30 ]; do
+		mdev -s 2>/dev/null || true
+		[ ! -b /dev/sda19 ] || return 0
+		attempt=$((attempt + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+configure_development_usb()
+{
+	mode=$(cmdline_value m1892.usb || true)
+	[ "$mode" = acm-ncm ] || { log "development USB disabled mode=${mode:-unset}"; return 1; }
+	gadget=/sys/kernel/config/usb_gadget/m1892
+	[ -d /sys/kernel/config/usb_gadget ] || return 1
+	mkdir -p "$gadget/strings/0x409" "$gadget/configs/c.1/strings/0x409"
+	echo 0x1d6b >"$gadget/idVendor"
+	echo 0x0104 >"$gadget/idProduct"
+	echo 0xef >"$gadget/bDeviceClass"
+	echo 0x02 >"$gadget/bDeviceSubClass"
+	echo 0x01 >"$gadget/bDeviceProtocol"
+	echo M1892MAINLINE >"$gadget/strings/0x409/serialnumber"
+	echo 'Meizu mainline Debian stage2' >"$gadget/strings/0x409/manufacturer"
+	echo 'M1892 Debian stage2 ACM plus NCM' >"$gadget/strings/0x409/product"
+	echo 'CDC NCM network and ACM console' >"$gadget/configs/c.1/strings/0x409/configuration"
+	echo 250 >"$gadget/configs/c.1/MaxPower"
+	if mkdir "$gadget/functions/ncm.usb0" 2>/dev/null; then
+		echo 02:00:00:45:18:92 >"$gadget/functions/ncm.usb0/dev_addr"
+		echo 02:00:00:45:18:93 >"$gadget/functions/ncm.usb0/host_addr"
+		ln -s "$gadget/functions/ncm.usb0" "$gadget/configs/c.1/" 2>/dev/null || true
+	fi
+	if mkdir "$gadget/functions/acm.usb0" 2>/dev/null; then
+		ln -s "$gadget/functions/acm.usb0" "$gadget/configs/c.1/" 2>/dev/null || true
+	fi
+	udc=
+	for candidate in /sys/class/udc/*; do
+		[ -e "$candidate" ] || continue
+		udc=${candidate##*/}
+		break
+	done
+	[ -n "$udc" ] || { log 'development USB unavailable: UDC=none'; return 1; }
+	echo "$udc" >"$gadget/UDC"
+	for interface in usb0 ncm0; do
+		[ -e "/sys/class/net/$interface" ] || continue
+		ifconfig "$interface" 169.254.45.1 netmask 255.255.0.0 up || true
+		break
+	done
+	log "development USB configured UDC=$udc"
+}
+
+load_panel_driver()
+{
+	if grep -q '^panel_samsung_sofef00m ' /proc/modules 2>/dev/null; then
+		return 0
+	fi
+	[ "$(sha256sum "$panel_module" 2>/dev/null | awk '{print $1}')" = \
+		"$expected_panel_sha256" ] || {
+		log 'SOFEF00M panel module hash mismatch'
+		return 1
+	}
+	insmod "$panel_module" || {
+		log 'SOFEF00M panel module load failed'
+		return 1
+	}
+	[ -d /sys/bus/mipi-dsi/drivers/panel-samsung-sofef00m ] || {
+		log 'SOFEF00M panel driver registration absent'
+		return 1
+	}
+	log "SOFEF00M panel module loaded hash=$expected_panel_sha256"
+}
+
+rescue_shell()
+{
+	terminal=$1
+	child=
+	trap '[ -z "$child" ] || kill "$child" 2>/dev/null || true; exit 0' TERM INT
+	while [ ! -c "$terminal" ]; do sleep 1; done
+	while [ ! -e /run/m1892-switch-root ]; do
+		setsid sh -c "exec sh -l <'$terminal' >'$terminal' 2>&1" &
+		child=$!
+		wait "$child" 2>/dev/null || true
+		child=
+		sleep 1
+	done
+}
+
+block_mount_present()
+{
+	awk '$1 ~ "^/dev/(sd|mmcblk|nvme|mapper)" { found=1 }
+		END { exit found ? 0 : 1 }' /proc/mounts
+}
+
+rootfs_ready()
+{
+	[ -f "$ready" ] && [ -f "$archive" ] || return 1
+	[ "$(stat -c %s "$archive" 2>/dev/null || true)" = "$expected_bytes" ] || return 1
+	[ "$(sha256sum "$archive" 2>/dev/null | awk '{print $1}')" = \
+		"$expected_sha256" ]
+}
+
+copy_runtime_payload()
+{
+	mkdir -p "$newroot/lib/firmware" "$newroot/lib/modules" \
+		"$newroot/usr/libexec/m1892"
+	cp -a /lib/firmware/. "$newroot/lib/firmware/" 2>/dev/null || true
+	for module_tree in /lib/modules/m1892-*; do
+		[ -d "$module_tree" ] || continue
+		cp -a "$module_tree" "$newroot/lib/modules/"
+	done
+	for helper in /bin/m1892-* /bin/reboot-fastboot; do
+		[ -f "$helper" ] || continue
+		name=${helper##*/}
+		# The Debian image carries the reproducibly built GPL helper. Keep
+		# Recovery diagnostics from replacing it with the initramfs multicall
+		# implementation after the rootfs verifier has already passed.
+		if [ "$name" = reboot-fastboot ] &&
+			[ -x "$newroot/usr/libexec/m1892/$name" ]; then
+			continue
+		fi
+		cp "$helper" "$newroot/usr/libexec/m1892/$name"
+	done
+}
+
+prepare_persistent_root()
+{
+	[ -b /dev/sda19 ] || return 1
+	[ "$(cat /sys/class/block/sda19/partition 2>/dev/null || true)" = 19 ] || return 1
+	grep -Fxq 'PARTNAME=userdata' /sys/class/block/sda19/uevent || return 1
+	[ "$(cat /sys/class/block/sda/queue/logical_block_size 2>/dev/null || true)" = 4096 ] ||
+		return 1
+	sectors=$(cat /sys/class/block/sda19/size 2>/dev/null || true)
+	case "$sectors" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$sectors" -ge 16777216 ] || return 1
+	blkid_result=$(blkid /dev/sda19 2>/dev/null || true)
+	case "$blkid_result" in *'TYPE="ext4"'*) ;; *) return 1 ;; esac
+	case "$blkid_result" in *"LABEL=\"$persistent_label\""*) ;; *) return 1 ;; esac
+	case "$blkid_result" in *"UUID=\"$persistent_uuid\""*) ;; *) return 1 ;; esac
+	block_mount_present && return 1
+	mount -t ext4 -o ro,noload,noatime /dev/sda19 "$newroot" || return 1
+	if ! grep -Fxq 'ID=debian' "$newroot/etc/os-release" ||
+		! grep -Fxq 'rootfs_id=m1892-debian13-stage7-persistent' \
+			"$newroot/etc/m1892-rootfs-identity" ||
+		[ ! -x "$newroot/usr/lib/systemd/systemd" ] ||
+		[ "$(readlink -f "$newroot/sbin/init")" !=
+			"$newroot/usr/lib/systemd/systemd" ]; then
+		umount "$newroot" 2>/dev/null || true
+		return 1
+	fi
+	umount "$newroot" || return 1
+	mount -t ext4 -o rw,noatime /dev/sda19 "$newroot" || {
+		umount "$newroot" 2>/dev/null || true
+		return 1
+	}
+	if [ ! -s "$newroot/etc/machine-id" ]; then
+		machine_id=$(tr -d '-' </proc/sys/kernel/random/uuid 2>/dev/null || true)
+		[ "${#machine_id}" -eq 32 ] || return 1
+		printf '%s\n' "$machine_id" >"$newroot/etc/machine-id" || return 1
+	fi
+	hostname m1892-debian13 2>/dev/null || true
+	mkdir -p "$newroot/proc" "$newroot/sys" "$newroot/dev" "$newroot/run"
+	return 0
+}
+
+prepare_debian_root()
+{
+	if [ "$root_mode" = persistent-userdata ]; then
+		prepare_persistent_root
+		return $?
+	fi
+	rootfs_ready || return 1
+	grep -Eq '^tmpfs /run tmpfs ' /proc/mounts || return 1
+	block_mount_present && return 1
+	gzip -dc "$archive" >"$root_image" || return 1
+	[ "$(stat -c %s "$root_image" 2>/dev/null || true)" = \
+		"$expected_image_bytes" ] || return 1
+	[ "$(sha256sum "$root_image" 2>/dev/null | awk '{print $1}')" = \
+		"$expected_image_sha256" ] || return 1
+	# The compressed transfer copy is no longer needed after both hashes pass.
+	# Releasing it before systemd/desktop startup is important for larger RAM roots.
+	rm -f "$archive" "$ready" || return 1
+	loopdev=$(losetup -f) || return 1
+	losetup "$loopdev" "$root_image" || return 1
+	mount -t ext4 -o rw,noatime "$loopdev" "$newroot" || return 1
+	grep -Fxq 'ID=debian' "$newroot/etc/os-release" || return 1
+	grep -Eq '^VERSION_ID="?13"?$' "$newroot/etc/os-release" || return 1
+	grep -Fxq 'rootfs_id=m1892-debian13-stage2-ram' \
+		"$newroot/etc/m1892-rootfs-identity" || return 1
+	[ -x "$newroot/usr/lib/systemd/systemd" ] || return 1
+	[ "$(readlink -f "$newroot/sbin/init")" = \
+		"$newroot/usr/lib/systemd/systemd" ] || return 1
+	# The public image intentionally ships an empty machine-id.  This prototype
+	# is ephemeral and has no interactive owner setup, so create a fresh ID only
+	# in the RAM-backed copy.  That keeps systemd-firstboot from blocking PID 1
+	# on a root-password prompt while preserving the final installation policy.
+	machine_id=$(tr -d '-' </proc/sys/kernel/random/uuid 2>/dev/null || true)
+	[ "${#machine_id}" -eq 32 ] || return 1
+	printf '%s\n' "$machine_id" >"$newroot/etc/machine-id" || return 1
+	hostname m1892-debian-stage2 2>/dev/null || true
+	copy_runtime_payload || return 1
+	mkdir -p "$newroot/proc" "$newroot/sys" "$newroot/dev" "$newroot/run"
+	block_mount_present && return 1
+	return 0
+}
+
+root_candidate_ready()
+{
+	if [ "$root_mode" = persistent-userdata ]; then
+		[ -b /dev/sda19 ]
+	else
+		rootfs_ready
+	fi
+}
+
+normalize_core_device_permissions()
+{
+	# BusyBox mdev is used in the Recovery initramfs to discover UFS and DRM
+	# before Debian's udev is available.  Its default mode can leave the
+	# POSIX pseudo devices root-only for the first systemd transaction.  D-Bus
+	# and polkit then fail before udev has a chance to correct /dev/null, which
+	# also causes NetworkManager's initial job to be skipped.  Restore the
+	# standard modes at the hand-off boundary; Debian udev owns /dev after it
+	# starts.
+	for device in null zero full random urandom tty; do
+		[ -c "/dev/$device" ] || {
+			log "core character device absent device=$device"
+			return 1
+		}
+		chmod 0666 "/dev/$device" || return 1
+	done
+}
+
+switch_to_debian()
+{
+	prepare_debian_root || {
+		log 'Debian root preparation failed; holding recoverable initramfs shell'
+		return 1
+	}
+	{
+		printf 'archive_sha256=%s\n' "$expected_sha256"
+		printf 'root_mode=%s\n' "$root_mode"
+		if [ "$root_mode" = persistent-userdata ]; then
+			printf 'root_source=/dev/sda19\nfilesystem_uuid=%s\n' "$persistent_uuid"
+		else
+			printf 'block_mounts=none\n'
+		fi
+	} >/run/m1892-debian13-stage2-initramfs-pass
+	touch /run/m1892-switch-root
+	log "switch_root begin: Debian 13 systemd root_mode=$root_mode"
+	kill "$serial_msm_pid" "$serial_usb_pid" 2>/dev/null || true
+	wait "$serial_msm_pid" "$serial_usb_pid" 2>/dev/null || true
+	normalize_core_device_permissions || return 1
+	mount -o move /proc "$newroot/proc" || return 1
+	mount -o move /sys "$newroot/sys" || return 1
+	mount -o move /dev "$newroot/dev" || return 1
+	mount -o move /run "$newroot/run" || return 1
+	exec switch_root -c /dev/console "$newroot" /sbin/init
+}
+
+log 'Debian 13 stage2 recovery initramfs reached'
+log "policy: root_mode=$root_mode; invalid persistent roots fail closed"
+echo /bin/mdev >/proc/sys/kernel/hotplug 2>/dev/null || true
+mdev -s 2>/dev/null || true
+bring_up_storage_read_only || log 'UFS provider chain not ready'
+configure_development_usb || log 'development USB setup failed'
+rescue_shell /dev/ttyMSM0 &
+serial_msm_pid=$!
+rescue_shell /dev/ttyGS0 &
+serial_usb_pid=$!
+
+display_result=/run/m1892-debian13-stage2-display.result
+(
+	if load_panel_driver && /bin/m1892-display-auto-r59; then
+		attempt=0
+		while [ "$attempt" -lt 300 ]; do
+			mdev -s 2>/dev/null || true
+			if [ -e /sys/class/drm/card0 ] && [ -e /dev/dri/renderD128 ]; then
+				echo pass
+				exit 0
+			fi
+			attempt=$((attempt + 1))
+			sleep 0.1
+		done
+		log 'display/GPU providers bound but DRM nodes did not appear'
+	fi
+	echo fail
+) >"$display_result" &
+
+elapsed=0
+while [ "$elapsed" -le 600 ]; do
+	if [ -s "$display_result" ] && root_candidate_ready; then
+		[ "$(cat "$display_result")" = pass ] || {
+			log 'display/GPU/input provider gate failed; holding rescue shell'
+			break
+		}
+		switch_to_debian || break
+	fi
+	if [ $((elapsed % 20)) -eq 0 ]; then
+		log "waiting elapsed=${elapsed}s rootfs=$([ -f "$ready" ] && echo published || echo pending) display=$([ -s "$display_result" ] && cat "$display_result" || echo pending) sda19=$([ -b /dev/sda19 ] && echo present || echo absent)"
+	fi
+	sleep 2
+	elapsed=$((elapsed + 2))
+done
+
+if [ "$root_mode" = persistent-userdata ]; then
+	log 'fail-closed persistent rescue hold; inspect userdata before reboot'
+else
+	log 'fail-closed RAM rescue hold; persistent boot and userdata were not modified'
+fi
+while true; do sleep 3600; done

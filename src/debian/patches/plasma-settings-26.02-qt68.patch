@@ -1,0 +1,22 @@
+Description: accept the QML array syntax supported by Debian 13 Qt 6.8
+Author: M1892 Mainline Project <noreply@localhost>
+Origin: vendor
+Forwarded: not-needed
+Last-Update: 2026-09-11
+
+The upstream 26.02 release leaves a trailing comma after the only object in a
+QML list property.  qmlcachegen from Debian 13's Qt 6.8 rejects that spelling.
+Removing the trailing comma does not change the object graph or navigation
+behaviour.
+
+--- a/src/qml/KCMPageContainer.qml
++++ b/src/qml/KCMPageContainer.qml
+@@ -59,7 +59,7 @@ Kirigami.Page {
+                     root.actions.push(action);
+                 }
+             }
+-        },
++        }
+     ]
+ 
+     Component {

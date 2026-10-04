@@ -1,0 +1,3 @@
+# WCN3990 is not present when the early wake-policy oneshot runs. Apply the
+# accepted no-WoL policy at the standard platform-driver bind event instead.
+ACTION=="bind", SUBSYSTEM=="platform", KERNEL=="18800000.wifi", DRIVER=="ath10k_snoc", ATTR{power/wakeup}="disabled"

@@ -1,0 +1,172 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail()
+{
+	message="M1892_DEBIAN_STAGE3_RUNTIME_FAIL: $*"
+	printf '%s\n' "$message" >/dev/console 2>/dev/null || true
+	printf '%s\n' "$message" >/dev/kmsg 2>/dev/null || true
+	exit 1
+}
+
+[ "$(cat /proc/1/comm 2>/dev/null)" = systemd ] || fail pid1-not-systemd
+grep -Fxq 'ID=debian' /etc/os-release || fail wrong-os
+grep -Eq '^VERSION_ID="?13"?$' /etc/os-release || fail wrong-version
+root_mode=$(sed -n 's/^root_mode=//p' /etc/m1892-rootfs-identity)
+account_mode=$(sed -n 's/^account_mode=//p' /etc/m1892-rootfs-identity)
+case "$root_mode" in
+	ram-loopback)
+		grep -Fxq 'rootfs_id=m1892-debian13-stage3-ram' /etc/m1892-rootfs-identity || fail wrong-rootfs
+		grep -Eq '^/dev/loop[0-9]+ / ext4 ' /proc/mounts || fail root-not-loopback-ext4
+		if awk '$1 ~ "^/dev/(sd|mmcblk|nvme|mapper)" { found=1 }
+			END { exit found ? 0 : 1 }' /proc/mounts; then
+			fail persistent-block-filesystem-mounted
+		fi
+		block_mounts=none
+		stage=3-plasma-mobile-ram-root
+		;;
+	persistent-userdata)
+		grep -Fxq 'rootfs_id=m1892-debian13-stage7-persistent' /etc/m1892-rootfs-identity || fail wrong-rootfs
+		grep -Eq '^/dev/sda19 / ext4 ' /proc/mounts || fail root-not-userdata-ext4
+		awk '$1 ~ "^/dev/(sd|mmcblk|nvme|mapper)" && $1 != "/dev/sda19" { found=1 }
+			END { exit found ? 0 : 1 }' /proc/mounts && fail unexpected-block-filesystem
+		grep -Fxq 'result=pass' /var/lib/m1892/persistent-first-boot.pass ||
+			fail persistent-first-boot
+		block_mounts=sda19-only
+		stage=7-plasma-mobile-persistent-userdata
+		;;
+	*) fail invalid-root-mode ;;
+esac
+case "$account_mode:$root_mode" in
+	recovery-live:ram-loopback|development-persistent:persistent-userdata) ;;
+	oem-owner:persistent-userdata)
+		state_dir=/var/lib/m1892
+		owner_marker=$state_dir/oem-owner-created
+		cleanup_marker=$state_dir/oem-setup-cleanup.pass
+		[ "$(stat -c %a:%u:%g "$state_dir" 2>/dev/null)" = 755:0:0 ] ||
+			fail oem-state-directory-metadata
+		[ "$(stat -c %a:%u:%g "$owner_marker" 2>/dev/null)" = 644:0:0 ] ||
+			fail oem-owner-marker-metadata
+		[ "$(stat -c %a:%u:%g "$cleanup_marker" 2>/dev/null)" = 600:0:0 ] ||
+			fail oem-cleanup-marker-metadata
+		[ "$(wc -l <"$owner_marker")" = 6 ] || fail oem-owner-marker-lines
+		[ "$(wc -l <"$cleanup_marker")" = 3 ] || fail oem-cleanup-marker-lines
+		owner=$(sed -n 's/^owner=//p' "$owner_marker" 2>/dev/null)
+		[ -n "$owner" ] && getent passwd "$owner" >/dev/null || fail formal-owner-absent
+		owner_uid=$(getent passwd "$owner" | cut -d: -f3)
+		marker_uid=$(sed -n 's/^uid=//p' "$owner_marker")
+		case "$marker_uid" in ''|*[!0-9]*) fail oem-owner-marker-uid ;; esac
+		[ "$marker_uid" = "$owner_uid" ] || fail oem-owner-marker-uid-mismatch
+		grep -Fxc 'result=pass' "$owner_marker" | grep -Fxq 1 || fail oem-owner-marker-result
+		grep -Fxc 'account_mode=oem-owner' "$owner_marker" | grep -Fxq 1 ||
+			fail oem-owner-marker-account-mode
+		grep -Fxc "owner=$owner" "$owner_marker" | grep -Fxq 1 || fail oem-owner-marker-owner
+		grep -Fxc "uid=$marker_uid" "$owner_marker" | grep -Fxq 1 || fail oem-owner-marker-uid-line
+		autologin=$(sed -n 's/^autologin=//p' "$owner_marker")
+		case "$autologin" in yes|no) ;; *) fail oem-owner-marker-autologin ;; esac
+		grep -Fxc "autologin=$autologin" "$owner_marker" | grep -Fxq 1 ||
+			fail oem-owner-marker-autologin-line
+		grep -Fxc 'state=created-awaiting-reboot' "$owner_marker" | grep -Fxq 1 ||
+			fail oem-owner-marker-state
+		grep -Fxc 'result=pass' "$cleanup_marker" | grep -Fxq 1 ||
+			fail oem-cleanup-marker-result
+		grep -Fxc "owner=$owner" "$cleanup_marker" | grep -Fxq 1 ||
+			fail oem-cleanup-marker-owner
+		grep -Fxc 'setup_user=removed' "$cleanup_marker" | grep -Fxq 1 ||
+			fail oem-cleanup-marker-state
+		getent passwd m1892-setup >/dev/null && fail oem-setup-user-present
+		status=$(passwd -S "$owner" | awk '{print $2}')
+		[ "$status" = P ] || fail formal-owner-password
+		;;
+	*) fail account-root-mode ;;
+esac
+[ -e /sys/class/drm/card0 ] || fail drm-card0-absent
+[ -e /dev/dri/renderD128 ] || fail render-node-absent
+systemctl -q is-active iio-sensor-proxy.service || fail iio-sensor-proxy-inactive
+systemctl show sddm.service -p After --value | tr ' ' '\n' | \
+	grep -Fxq iio-sensor-proxy.service || fail sddm-iio-startup-order
+development_console=$(sed -n 's/^development_console=//p' /etc/m1892-rootfs-identity)
+usb_mode=$(sed -n 's/.*[[:space:]]m1892\.usb=\([^[:space:]]*\).*/\1/p' /proc/cmdline)
+case "$usb_mode:$development_console" in
+	acm-ncm:yes)
+		[ -c /dev/ttyGS0 ] || fail acm-console-absent
+		acm_console=present
+		usb_profile=development-acm-ncm
+		;;
+	acm-ncm:no) fail development-usb-without-console-policy ;;
+	off:yes|off:no)
+		[ ! -c /dev/ttyGS0 ] || fail unexpected-acm-console
+		[ ! -e /sys/class/net/usb0 ] || fail unexpected-usb-network
+		[ -z "$(find /sys/class/udc -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ] ||
+			fail unexpected-usb-device-controller
+		dr_mode=$(tr -d '\000' \
+			</sys/firmware/devicetree/base/soc@0/usb@a6f8800/usb@a600000/dr_mode \
+			2>/dev/null || true)
+		[ "$dr_mode" = host ] || fail "daily-usb-dr-mode:$dr_mode"
+		grep -Fq '[host]' /sys/class/typec/port0/data_role 2>/dev/null ||
+			fail daily-usb-data-role
+		acm_console=disabled
+		usb_profile=daily-host
+		;;
+	*:yes|*:no) fail "unsupported-usb-mode:$usb_mode" ;;
+	*) fail invalid-development-console ;;
+esac
+
+elapsed=0
+marker=
+while [ "$elapsed" -lt 150 ]; do
+	for candidate in /run/user/*/m1892-debian13-stage3-session-pass; do
+		[ -f "$candidate" ] || continue
+		marker=$candidate
+		break
+	done
+	[ -z "$marker" ] || break
+	sleep 2
+	elapsed=$((elapsed + 2))
+done
+[ -n "$marker" ] || fail plasma-session-or-freedreno-timeout
+
+grep -Fxq 'result=pass' "$marker" || fail invalid-session-result
+grep -Fxq 'session_type=wayland' "$marker" || fail invalid-session-type-marker
+grep -Fxq 'renderer=msm-freedreno' "$marker" || fail invalid-session-renderer-marker
+session_account_mode=$(sed -n 's/^account_mode=//p' "$marker")
+[ "$session_account_mode" = "$account_mode" ] || fail session-account-mode-mismatch
+session_uid=$(sed -n 's/^uid=//p' "$marker")
+case "$session_uid" in ''|*[!0-9]*) fail invalid-session-uid ;; esac
+[ "$session_uid" -ge 1000 ] || fail non-owner-session
+if [ "$account_mode" = oem-owner ]; then
+	[ "$session_uid" = "$owner_uid" ] || fail session-owner-uid-mismatch
+fi
+session_id=$(loginctl list-sessions --no-legend 2>/dev/null |
+	awk -v uid="$session_uid" '$2 == uid { print $1; exit }')
+[ -n "$session_id" ] || fail login-session-absent
+[ "$(loginctl show-session "$session_id" -p Type --value)" = wayland ] || fail session-not-wayland
+[ "$(loginctl show-session "$session_id" -p Active --value)" = yes ] || fail session-not-active
+
+model=$(tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true)
+[ "$model" = 'Meizu 16th Plus (M1892)' ] || fail "wrong-device:$model"
+{
+	printf 'result=pass\n'
+	printf 'stage=%s\n' "$stage"
+	printf 'pid1=systemd\n'
+	printf 'os=debian-13\n'
+	printf 'architecture=%s\n' "$(uname -m)"
+	printf 'kernel=%s\n' "$(uname -r)"
+	printf 'model=%s\n' "$model"
+	printf 'root_mode=%s\n' "$root_mode"
+	printf 'account_mode=%s\n' "$account_mode"
+	printf 'block_mounts=%s\n' "$block_mounts"
+	printf 'plasma_session=active-wayland\n'
+	printf 'renderer=msm-freedreno\n'
+	printf 'orientation_startup_order=iio-before-sddm\n'
+	printf 'session_uid=%s\n' "$session_uid"
+	printf 'usb_profile=%s\n' "$usb_profile"
+	printf 'acm_console=%s\n' "$acm_console"
+} >/run/m1892-debian13-stage3-pass
+
+message="M1892_DEBIAN_STAGE3_RUNTIME_PASS plasma=wayland renderer=msm-freedreno root=$root_mode usb=$usb_profile"
+printf '%s\n' "$message" >/dev/console 2>/dev/null || true
+printf '%s\n' "$message" >/dev/kmsg 2>/dev/null || true
+[ "$usb_profile" != development-acm-ncm ] || \
+	printf '%s\n' "$message" >/dev/ttyGS0 2>/dev/null || true

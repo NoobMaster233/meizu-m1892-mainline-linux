@@ -1,0 +1,2 @@
+# Configure the per-device public address only after the kernel has registered hci0.
+ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci0", TAG+="systemd", ENV{SYSTEMD_WANTS}+="m1892-bluetooth-identity.service"

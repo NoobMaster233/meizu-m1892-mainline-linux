@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Compatibility endpoint used by Steam's Gamescope power menu.
+set -euo pipefail
+
+# This is a nested Gamescope session inside an already running Plasma Mobile
+# session.  "Switch to Desktop" therefore means closing Steam; Gamescope then
+# exits with its child and reveals the existing Plasma desktop.
+exec /usr/local/bin/steam-arm64 -shutdown

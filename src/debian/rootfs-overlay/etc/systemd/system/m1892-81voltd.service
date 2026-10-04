@@ -1,0 +1,21 @@
+[Unit]
+Description=M1892 IMS data bearer service
+Documentation=https://gitlab.postmarketos.org/modem/81voltd
+Requires=ModemManager.service m1892-radio-online.service
+After=ModemManager.service m1892-radio-online.service NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/m1892/m1892-81voltd
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

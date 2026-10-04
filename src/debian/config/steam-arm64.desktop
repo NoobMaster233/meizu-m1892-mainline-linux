@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Steam (ARM64)
+Name[zh_CN]=Steam（ARM64 游戏模式）
+Comment=Steam native ARM64 client in Gamescope gaming mode
+Comment[zh_CN]=在 Gamescope 游戏模式中运行 Steam 原生 ARM64 客户端
+Exec=/usr/local/bin/steam-gamescope-arm64 %U
+Icon=steam-arm64
+Terminal=false
+Categories=Game;
+MimeType=x-scheme-handler/steam;x-scheme-handler/steamlink;
+StartupWMClass=steam
+Actions=DesktopMode;
+
+[Desktop Action DesktopMode]
+Name=Desktop mode without Gamescope
+Name[zh_CN]=桌面模式（不使用 Gamescope）
+Exec=/usr/local/bin/steam-arm64 -forcedesktopscaling 1.0

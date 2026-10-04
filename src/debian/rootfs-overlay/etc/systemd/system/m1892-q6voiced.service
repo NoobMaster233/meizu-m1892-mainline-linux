@@ -1,0 +1,22 @@
+[Unit]
+Description=M1892 QDSP6 voice call PCM lifetime
+Documentation=https://gitlab.postmarketos.org/postmarketOS/q6voiced
+After=dbus.service sound.target m1892-radio-online.service ModemManager.service
+Wants=m1892-radio-online.service ModemManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/m1892/q6voiced hw:0,0
+User=daemon
+Group=audio
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

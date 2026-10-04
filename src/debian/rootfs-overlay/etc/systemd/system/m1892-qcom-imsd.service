@@ -1,0 +1,22 @@
+[Unit]
+Description=M1892 Qualcomm IMS registration service
+Documentation=https://gitlab.postmarketos.org/modem/openimsd/qcom-imsd
+Requires=m1892-81voltd.service ModemManager.service
+After=m1892-81voltd.service ModemManager.service NetworkManager.service
+Before=m1892-q6voiced.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/m1892/qcom-imsd
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

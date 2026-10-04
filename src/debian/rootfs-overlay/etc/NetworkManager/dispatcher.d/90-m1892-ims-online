@@ -1,0 +1,53 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+# IMS must start only after the ordinary cellular profile owns its QMAP data
+# interface.  The qmapmux numeric prefix is allocated again when ModemManager
+# recreates the modem after resume, so it is deliberately not hard-coded here.
+# Starting earlier can consume the first mux and leave both ordinary data and
+# IMS in a non-recoverable boot-time race.  NetworkManager supplies the event;
+# systemd owns process supervision and ordering after this bounded gate.
+case ${2:-} in
+	up|dhcp4-change|dhcp6-change|connectivity-change) ;;
+	*) exit 0 ;;
+esac
+
+modem=$(mmcli -L 2>/dev/null |
+	sed -n 's#.*/Modem/\([0-9][0-9]*\).*#\1#p' | head -1)
+[ -n "$modem" ] || exit 0
+nmcli -t -f TYPE,STATE connection show --active 2>/dev/null |
+	grep -qx 'gsm:activated' || exit 0
+
+voltd_was_active=no
+imsd_was_active=no
+systemctl is-active --quiet m1892-81voltd.service && voltd_was_active=yes
+systemctl is-active --quiet m1892-qcom-imsd.service && imsd_was_active=yes
+
+if [ "$voltd_was_active" = no ]; then
+	systemctl start --no-block m1892-81voltd.service
+fi
+if [ "$imsd_was_active" = no ]; then
+	systemctl start --no-block m1892-qcom-imsd.service
+fi
+
+# A ModemManager restart can leave both daemons alive while the deferred IMS
+# bearer creation has already been cancelled.  The GSM-up event is the retry
+# boundary: restart only 81voltd so the modem resends its IMS DCM request.
+# Do not do this on first service start, where bearer creation is asynchronous.
+if [ "$voltd_was_active" = yes ] && [ "$imsd_was_active" = yes ]; then
+	ims_ready=no
+	for bearer in $(mmcli -m "$modem" --output-keyvalue 2>/dev/null |
+		sed -n 's#^modem.generic.bearers.value\[[0-9][0-9]*\][[:space:]]*: /org/freedesktop/ModemManager1/Bearer/##p'); do
+		info=$(mmcli -b "$bearer" --output-keyvalue 2>/dev/null || true)
+		connected=$(printf '%s\n' "$info" |
+			sed -n 's/^bearer.status.connected[[:space:]]*: //p')
+		apn=$(printf '%s\n' "$info" |
+			sed -n 's/^bearer.properties.apn[[:space:]]*: //p' | tr '[:upper:]' '[:lower:]')
+		if [ "$connected" = yes ] && [ "$apn" = ims ]; then
+			ims_ready=yes
+			break
+		fi
+	done
+	[ "$ims_ready" = yes ] || systemctl restart --no-block m1892-81voltd.service
+fi

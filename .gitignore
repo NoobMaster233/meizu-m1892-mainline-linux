@@ -1,0 +1,17 @@
+/build/
+/out/
+/cache/
+/downloads/
+/local-private/
+*.img
+*.ext4
+*.raw
+*.zip
+*.log
+__pycache__/
+*.pyc
+.env
+*.key
+*.pem
+*.nmconnection
+!src/**/m1892-cellular.nmconnection

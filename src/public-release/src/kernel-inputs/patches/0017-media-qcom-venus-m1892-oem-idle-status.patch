@@ -1,0 +1,31 @@
+From: M1892 Mainline Maintainers <maintainers@example.invalid>
+Subject: [PATCH] media: qcom: venus: accept M1892 OEM idle status
+
+The M1892 Venus firmware reports CPU WFI and INIT_STATUS but omits the
+mainline INIT_IDLE bit.  Accept that combination only on meizu,m1892 while
+continuing to prefer INIT_IDLE and retaining the later PC_READY check.
+
+This is the minimal source delta from the physically accepted R321 module.
+
+diff --git a/drivers/media/platform/qcom/venus/hfi_venus.c b/drivers/media/platform/qcom/venus/hfi_venus.c
+--- a/drivers/media/platform/qcom/venus/hfi_venus.c
++++ b/drivers/media/platform/qcom/venus/hfi_venus.c
+@@ -7,6 +7,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/iopoll.h>
+ #include <linux/kernel.h>
++#include <linux/of.h>
+ #include <linux/slab.h>
+ 
+ #include "core.h"
+@@ -1553,7 +1554,9 @@ static bool venus_cpu_and_video_core_idle(struct venus_hfi_device *hdev)
+ 	ctrl_status = readl(cpu_cs_base + CPU_CS_SCIACMDARG0);
+ 
+ 	if (cpu_status & WRAPPER_CPU_STATUS_WFI &&
+-	    ctrl_status & CPU_CS_SCIACMDARG0_INIT_IDLE_MSG_MASK)
++	    (ctrl_status & CPU_CS_SCIACMDARG0_INIT_IDLE_MSG_MASK ||
++	     (of_machine_is_compatible("meizu,m1892") &&
++	      ctrl_status & CPU_CS_SCIACMDARG0_INIT_STATUS_MASK)))
+ 		return true;
+ 
+ 	return false;

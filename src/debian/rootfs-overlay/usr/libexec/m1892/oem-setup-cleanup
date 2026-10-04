@@ -1,0 +1,47 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+marker=/var/lib/m1892/oem-owner-created
+done_marker=/var/lib/m1892/oem-setup-cleanup.pass
+[ -s "$marker" ] || exit 0
+owner=$(sed -n 's/^owner=//p' "$marker")
+[ -n "$owner" ] || exit 1
+/usr/libexec/m1892/oem-owner-finalize "$owner" >/dev/null
+if [ -e "$done_marker" ]; then
+	[ "$(wc -l <"$done_marker")" = 3 ] &&
+		grep -Fxc 'result=pass' "$done_marker" | grep -Fxq 1 &&
+		grep -Fxc "owner=$owner" "$done_marker" | grep -Fxq 1 &&
+		grep -Fxc 'setup_user=removed' "$done_marker" | grep -Fxq 1 || exit 1
+	systemctl disable m1892-oem-setup-recovery.service \
+		m1892-oem-setup-cleanup.service >/dev/null
+	exit 0
+fi
+if getent passwd m1892-setup >/dev/null; then
+	userdel m1892-setup
+fi
+if getent group m1892-setup >/dev/null; then
+	groupdel m1892-setup
+fi
+if [ -d /var/lib/m1892-oem-setup ]; then
+	find /var/lib/m1892-oem-setup -xdev -depth -delete
+fi
+rm -f /etc/polkit-1/rules.d/49-m1892-oem-setup.rules \
+	/etc/xdg/autostart/m1892-oem-account-setup.desktop \
+	/usr/local/share/applications/m1892-oem-account-setup.desktop \
+	/usr/lib/sysusers.d/m1892-oem-setup.conf
+rm -f /var/lib/m1892/oem-owner-pending
+tmp=$done_marker.tmp.$$
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+{
+	printf 'result=pass\n'
+	printf 'owner=%s\n' "$owner"
+	printf 'setup_user=removed\n'
+} >"$tmp"
+chmod 0600 "$tmp"
+sync -f "$tmp"
+mv "$tmp" "$done_marker"
+sync -f /var/lib/m1892
+systemctl disable m1892-oem-setup-recovery.service \
+	m1892-oem-setup-cleanup.service >/dev/null
+trap - EXIT HUP INT TERM

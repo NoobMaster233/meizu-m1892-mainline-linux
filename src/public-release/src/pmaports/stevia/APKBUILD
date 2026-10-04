@@ -1,0 +1,80 @@
+# Contributor: jane400 <alpine@j4ne.de>
+# M1892: pinned Alpine recipe for the upstream empty-app-id crash fix.
+maintainer="team/phosh <newbyte@postmarketos.org>"
+pkgname=stevia
+pkgver=0.57.0
+pkgrel=1
+pkgdesc="Alternative OSK for phosh"
+arch="all !riscv64"
+url="https://gitlab.gnome.org/World/Phosh/stevia"
+license="GPL-3.0-or-later"
+depends="hunspell-en-us"
+makedepends="
+	$pkgname-schemas
+	cmd:rst2man
+	dconf-dev
+	elogind-dev
+	feedbackd-dev
+	fzf
+	glib-dev
+	gmobile-dev
+	gnome-desktop-dev
+	gtk+3.0-dev
+	hunspell-dev
+	json-glib-dev
+	libhandy1-dev
+	meson
+	presage-dev
+	wayland-dev
+	wayland-protocols
+	"
+checkdepends="xvfb-run words-en"
+subpackages="
+	$pkgname-dbg
+	$pkgname-doc
+	$pkgname-lang
+	$pkgname-schemas
+	$pkgname-systemd
+	"
+source="https://gitlab.gnome.org/World/Phosh/stevia/-/archive/v$pkgver/stevia-v$pkgver.tar.gz
+	emoji-db.patch
+	"
+builddir="$srcdir/stevia-v$pkgver"
+
+provides="phosh-keyboard=0 phosh-osk-stub=$pkgver-r$pkgrel"
+provider_priority=1
+replaces="phosh"
+
+case "$CARCH" in
+armhf|armv7) ;;
+*) makedepends="$makedepends uim-dev"
+esac
+
+build() {
+	abuild-meson \
+		-Db_lto=true \
+		-Dman=true \
+		-Dwordlist=/usr/share/dict/american-english \
+		. output
+	meson compile -C output
+}
+
+check() {
+	xvfb-run -a meson test --print-errorlogs -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+}
+
+schemas() {
+	pkgdesc="$pkgdesc (schemas)"
+	depends=
+
+	amove usr/share/glib-2.0/schemas
+}
+
+sha512sums="
+8e7dce3460e49b29f6603a99c1449c27a6b22f136ceb5878e7e920db30e0c5919f147bfcd892f381b2644d2fac8cae19eaf3477513bb2d7ba050415c2034581a  stevia-v0.57.0.tar.gz
+a7c97f986a840c803239322f69dec6df6586a19b1e7d9ca11cff6a0b47861ab1d68263318b6ab93452d6526543428f6ced9617edbadd0c902c7e9767727c5c76  emoji-db.patch
+"

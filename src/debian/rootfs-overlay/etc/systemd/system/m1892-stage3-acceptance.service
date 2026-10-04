@@ -1,0 +1,13 @@
+[Unit]
+Description=M1892 Debian 13 Plasma Mobile acceptance gate
+After=display-manager.service systemd-logind.service m1892-persistent-first-boot.service
+Wants=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/stage3-acceptance
+RemainAfterExit=yes
+TimeoutStartSec=180
+
+[Install]
+WantedBy=graphical.target

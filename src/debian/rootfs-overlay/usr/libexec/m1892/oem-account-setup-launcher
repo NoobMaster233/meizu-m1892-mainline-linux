@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+[ "$(id -un)" = m1892-setup ] || exit 0
+[ ! -e /var/lib/m1892/oem-owner-created ] || exit 0
+runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+lock=$runtime/m1892-oem-account-setup.lock
+exec 9>"$lock"
+flock -n 9 || exit 0
+exec pkexec /usr/libexec/m1892/oem-calamares-wrapper

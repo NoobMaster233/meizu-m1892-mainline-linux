@@ -1,0 +1,14 @@
+[Unit]
+Description=M1892 Qualcomm radio provider modules
+After=systemd-modules-load.service
+Before=qrtr-ns.service rmtfs.service tqftpserv.service NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe qcom_pd_mapper
+ExecStart=/usr/sbin/modprobe reset_qcom_pdc
+ExecStart=/usr/sbin/modprobe qcom_q6v5_mss
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Remove the temporary M1892 OEM setup account
+After=local-fs.target
+Before=display-manager.service
+ConditionPathExists=/var/lib/m1892/oem-owner-created
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/oem-setup-cleanup
+
+[Install]
+WantedBy=multi-user.target

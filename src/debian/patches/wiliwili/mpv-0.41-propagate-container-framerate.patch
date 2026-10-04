@@ -1,0 +1,22 @@
+diff --git a/video/decode/vd_lavc.c b/video/decode/vd_lavc.c
+index 96c011f265..fd3fa884c5 100644
+--- a/video/decode/vd_lavc.c
++++ b/video/decode/vd_lavc.c
+@@ -21,6 +21,7 @@
+ #include <assert.h>
+ #include <stdbool.h>
+ 
++#include <libavutil/mathematics.h>
+ #include <libavcodec/avcodec.h>
+ #include <libavformat/version.h>
+ #include <libavutil/common.h>
+@@ -844,6 +845,9 @@ static void init_avctx(struct mp_filter *vd)
+         goto error;
+     }
+ 
++    if (c->fps > 0 && c->fps <= 240)
++        avctx->framerate = av_d2q(c->fps, 1000000);
++
+ #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+     if (avctx->width > 8192 || avctx->height > 8192) {
+         MP_ERR(vd, "Frame size too big %" PRIu32 "x%" PRIu32 ".\n", avctx->width, avctx->height);

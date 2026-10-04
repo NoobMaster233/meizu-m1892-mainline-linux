@@ -1,0 +1,20 @@
+[Unit]
+Description=Extract M1892 owner MPSS firmware read-only
+Requires=dev-disk-by\x2dpartlabel-modembak.device
+After=dev-disk-by\x2dpartlabel-modembak.device
+Before=m1892-radio-modules.service
+
+[Service]
+Type=oneshot
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/lib/firmware/qcom/sdm845/m1892
+ExecStart=/usr/libexec/m1892/m1892-fat16-mss-extract /dev/disk/by-partlabel/modembak /lib/firmware/qcom/sdm845/m1892
+RemainAfterExit=yes
+TimeoutStartSec=20
+
+[Install]
+WantedBy=multi-user.target

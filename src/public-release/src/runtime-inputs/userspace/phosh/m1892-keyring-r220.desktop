@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=M1892 Secret Service
+Comment=Initialise the user keyring in the direct-autologin Phosh session
+Exec=/usr/local/libexec/m1892-keyring-r220
+OnlyShowIn=GNOME;Phosh;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-AutoRestart=true

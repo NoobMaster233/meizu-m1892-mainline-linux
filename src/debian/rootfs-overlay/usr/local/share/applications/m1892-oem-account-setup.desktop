@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Set up this M1892
+Name[zh_CN]=设置这台魅族 16th Plus
+Comment=Create the owner account and password
+Comment[zh_CN]=创建机主账户并设置密码
+Exec=/usr/libexec/m1892/oem-account-setup-launcher
+TryExec=/usr/libexec/m1892/oem-account-setup-launcher
+Icon=preferences-system-users
+Terminal=false
+StartupNotify=true
+Categories=Settings;
+OnlyShowIn=KDE;

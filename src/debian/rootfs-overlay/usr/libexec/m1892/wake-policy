@@ -1,0 +1,87 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+umask 077
+
+fail() { echo "M1892_WAKE_POLICY_FAIL: $*" >&2; exit 1; }
+
+rtc_kind()
+{
+	case $1 in
+		'rtc-efi rtc-efi.0') echo efi ;;
+		'rtc-pm8xxx c440000.spmi:pmic@0:rtc@6000') echo pmic ;;
+		*) echo other ;;
+	esac
+}
+
+if [ "${1:-}" = --self-test ]; then
+	[ "$(rtc_kind 'rtc-efi rtc-efi.0')" = efi ] || fail selftest-efi
+	[ "$(rtc_kind 'rtc-pm8xxx c440000.spmi:pmic@0:rtc@6000')" = pmic ] ||
+		fail selftest-pmic
+	[ "$(rtc_kind unrelated)" = other ] || fail selftest-other
+	echo M1892_WAKE_POLICY_SELFTEST_PASS
+	exit 0
+fi
+
+[ "$(id -u)" = 0 ] || fail root-required
+[ "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' ] ||
+	fail wrong-hardware
+
+efi_rtc=
+pmic_rtc=
+efi_count=0
+pmic_count=0
+for rtc in /sys/class/rtc/rtc*; do
+	[ -d "$rtc" ] || continue
+	kind=$(rtc_kind "$(cat "$rtc/name" 2>/dev/null || true)")
+	case $kind in
+		efi) efi_rtc=$rtc; efi_count=$((efi_count + 1)) ;;
+		pmic) pmic_rtc=$rtc; pmic_count=$((pmic_count + 1)) ;;
+	esac
+done
+[ "$efi_count" -eq 1 ] || fail "efi-rtc-count:$efi_count"
+[ "$pmic_count" -eq 1 ] || fail "pmic-rtc-count:$pmic_count"
+efi_wakeup=$efi_rtc/device/power/wakeup
+[ -w "$efi_wakeup" ] || fail efi-wakeup-not-writable
+printf 'disabled\n' >"$efi_wakeup"
+[ "$(cat "$efi_wakeup")" = disabled ] || fail efi-wakeup-still-enabled
+
+pwr_wakeup=
+pwr_count=0
+for wakeup in /sys/class/wakeup/wakeup*; do
+	[ -d "$wakeup" ] || continue
+	case $(cat "$wakeup/name" 2>/dev/null || true) in
+		*c440000.spmi:pmic@0:pon@800:pwrkey)
+			pwr_wakeup=$wakeup/device/power/wakeup
+			pwr_count=$((pwr_count + 1))
+			;;
+	esac
+done
+[ "$pwr_count" -eq 1 ] || fail "power-key-count:$pwr_count"
+[ -w "$pwr_wakeup" ] || fail power-key-wakeup-not-writable
+printf 'enabled\n' >"$pwr_wakeup"
+[ "$(cat "$pwr_wakeup")" = enabled ] || fail power-key-wakeup-disabled
+
+wifi_wakeup=/sys/devices/platform/soc@0/18800000.wifi/power/wakeup
+wifi_wakeup_state=udev-managed-pending
+if [ -e "$wifi_wakeup" ]; then
+	[ -w "$wifi_wakeup" ] || fail wifi-wakeup-not-writable
+	printf 'disabled\n' >"$wifi_wakeup"
+	[ "$(cat "$wifi_wakeup")" = disabled ] || fail wifi-wakeup-still-enabled
+	wifi_wakeup_state=disabled
+fi
+
+wakeup_count=$(timeout 3 cat /sys/power/wakeup_count 2>/dev/null || true)
+case $wakeup_count in ''|*[!0-9]*) fail wakeup-count-unreadable ;; esac
+
+{
+	echo format=m1892-wake-policy-v1
+	echo efi_rtc="${efi_rtc##*/}"
+	echo efi_wakeup=disabled
+	echo pmic_rtc="${pmic_rtc##*/}"
+	echo power_key_wakeup=enabled
+	echo wifi_wakeup="$wifi_wakeup_state"
+	echo wakeup_count="$wakeup_count"
+} >/run/m1892-wake-policy.state
+
+echo M1892_WAKE_POLICY_PASS

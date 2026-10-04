@@ -1,0 +1,20 @@
+[Unit]
+Description=M1892 validated system-sleep wake policy
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=sleep.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/wake-policy
+RemainAfterExit=yes
+TimeoutStartSec=15
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

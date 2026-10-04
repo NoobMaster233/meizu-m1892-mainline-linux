@@ -1,0 +1,2 @@
+# Context whitespace inside upstream patches is part of their byte identity.
+*.patch -whitespace

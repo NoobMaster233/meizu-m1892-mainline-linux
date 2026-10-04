@@ -1,0 +1,56 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail()
+{
+	message="M1892_DEBIAN_STAGE6_RUNTIME_FAIL: $*"
+	printf '%s\n' "$message" >/dev/console 2>/dev/null || true
+	printf '%s\n' "$message" >/dev/kmsg 2>/dev/null || true
+	exit 1
+}
+
+grep -Fxq 'rootfs_id=m1892-debian13-stage7-persistent' /etc/m1892-rootfs-identity ||
+	fail persistent-root
+[ "$(findmnt -n -o SOURCE /)" = /dev/sda19 ] || fail root-source
+[ -s /run/m1892-debian13-stage3-pass ] || fail stage3-acceptance
+for binary in angelfish qmlkonsole dolphin plasma-systemmonitor kdeconnect-cli \
+	flatpak fastfetch spectacle docker dockerd retroarch; do
+	command -v "$binary" >/dev/null 2>&1 || fail "binary:$binary"
+done
+for core in gambatte_libretro.so mgba_libretro.so nestopia_libretro.so; do
+	[ -f "/usr/lib/aarch64-linux-gnu/libretro/$core" ] || fail "libretro-core:$core"
+done
+systemctl -q is-active docker.service || fail docker-service
+systemctl -q is-active systemd-timesyncd.service || fail timesyncd-service
+[ "$(docker info --format '{{.Architecture}}' 2>/dev/null)" = aarch64 ] ||
+	fail docker-architecture
+docker compose version >/dev/null 2>&1 || fail docker-compose
+docker buildx version >/dev/null 2>&1 || fail docker-buildx
+flatpak --version >/dev/null 2>&1 || fail flatpak
+[ "$(dpkg-query -W -f='${Version}' plasma-settings 2>/dev/null)" = 26.02.0-0m1892.1 ] ||
+	fail plasma-settings-version
+[ -x /usr/libexec/m1892/cellular-acceptance ] || fail cellular-acceptance-helper
+[ -e /sys/class/power_supply/qcom-battery ] || fail battery
+set -- /sys/class/backlight/*
+[ "$#" -ge 1 ] && [ -e "$1/brightness" ] || fail backlight
+
+{
+	printf 'result=pass\n'
+	printf 'root=/dev/sda19\n'
+	printf 'daily_apps=present\n'
+	printf 'docker=active-aarch64\n'
+	printf 'docker_compose=present\n'
+	printf 'docker_buildx=present\n'
+	printf 'flatpak=present\n'
+	printf 'fastfetch=present\n'
+	printf 'spectacle=present\n'
+	printf 'timesyncd=active\n'
+	printf 'retroarch=present\n'
+	printf 'plasma_settings=26.02.0-0m1892.1\n'
+	printf 'cellular_acceptance=explicit-helper-present\n'
+	printf 'libretro_cores=gambatte,mgba,nestopia\n'
+	printf 'battery=present\n'
+	printf 'backlight=present\n'
+} >/run/m1892-debian13-stage6-pass
+echo M1892_DEBIAN_STAGE6_RUNTIME_PASS

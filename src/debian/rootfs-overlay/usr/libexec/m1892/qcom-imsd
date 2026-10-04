@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+prefix=/opt/m1892-openimsd
+test -r "$prefix/lib/libqmi-glib.so.5"
+test -r "$prefix/lib/girepository-1.0/Qmi-1.0.typelib"
+test -r "$prefix/qcom-imsd/imsd.toml"
+
+export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GI_TYPELIB_PATH="$prefix/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+export PYTHONPATH="$prefix/python:$prefix/qcom-imsd/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+
+exec python3 -m qcom_imsd \
+	-d qrtr://0 \
+	-c "$prefix/qcom-imsd/imsd.toml"

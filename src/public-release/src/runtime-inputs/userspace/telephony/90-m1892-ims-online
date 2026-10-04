@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+# NetworkManager invokes dispatcher hooks after connection state changes. IMS
+# must start only after the ordinary cellular bearer and ModemManager object
+# both exist; starting it earlier can steal the first mux and lose IMS for the
+# entire boot. This event-driven retry also covers a later cellular reconnect.
+case ${2:-} in
+	up|dhcp4-change|dhcp6-change|connectivity-change) ;;
+	*) exit 0 ;;
+esac
+
+mmcli -L 2>/dev/null |
+	grep -Eq '/org/freedesktop/ModemManager1/Modem/[0-9]+' || exit 0
+nmcli -t -f TYPE,STATE connection show --active 2>/dev/null |
+	grep -qx 'gsm:activated' || exit 0
+
+rc-service 81voltd status >/dev/null 2>&1 || rc-service 81voltd start
+rc-service m1892-qcom-imsd status >/dev/null 2>&1 ||
+	rc-service m1892-qcom-imsd start

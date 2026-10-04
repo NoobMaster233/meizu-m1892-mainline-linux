@@ -1,0 +1,42 @@
+From: M1892 maintainers <m1892-mainline@example.invalid>
+Subject: [PATCH] Revert "clk: qcom: dispcc-sdm845: Enable parents for pixel clocks"
+
+This reverts the SDM845 part of upstream commit
+a1d63493634e98360140027fef49d82b1ff0a267.
+
+On the physical Meizu M1892, the change makes orphan reparenting and the
+unused-clock pass disable and unprepare dsi0_phy_pll_out_dsiclk twice.  Linux
+7.1-rc1 consequently emits four clock-framework WARN call traces before the
+display probes.  The display works after restoring the previous SDM845 flags.
+
+The same CLK_OPS_PARENT_ENABLE regression signature has been reported for the
+closely related Qualcomm display-clock topology upstream.  Keep this narrowly
+scoped revert until the common clock / DSI dependency is fixed upstream.
+---
+ drivers/clk/qcom/dispcc-sdm845.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clk/qcom/dispcc-sdm845.c b/drivers/clk/qcom/dispcc-sdm845.c
+index 78e43f6d7502..2f9e9665d7e9 100644
+--- a/drivers/clk/qcom/dispcc-sdm845.c
++++ b/drivers/clk/qcom/dispcc-sdm845.c
+@@ -280,7 +280,7 @@ static struct clk_rcg2 disp_cc_mdss_pclk0_clk_src = {
+ 		.name = "disp_cc_mdss_pclk0_clk_src",
+ 		.parent_data = disp_cc_parent_data_4,
+ 		.num_parents = ARRAY_SIZE(disp_cc_parent_data_4),
+-		.flags = CLK_SET_RATE_PARENT | CLK_OPS_PARENT_ENABLE,
++		.flags = CLK_SET_RATE_PARENT,
+ 		.ops = &clk_pixel_ops,
+ 	},
+ };
+@@ -295,7 +295,7 @@ static struct clk_rcg2 disp_cc_mdss_pclk1_clk_src = {
+ 		.name = "disp_cc_mdss_pclk1_clk_src",
+ 		.parent_data = disp_cc_parent_data_4,
+ 		.num_parents = ARRAY_SIZE(disp_cc_parent_data_4),
+-		.flags = CLK_SET_RATE_PARENT | CLK_OPS_PARENT_ENABLE,
++		.flags = CLK_SET_RATE_PARENT,
+ 		.ops = &clk_pixel_ops,
+ 	},
+ };
+-- 
+2.47.2

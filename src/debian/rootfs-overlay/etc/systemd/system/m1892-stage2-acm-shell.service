@@ -1,0 +1,22 @@
+[Unit]
+Description=M1892 local development ACM recovery shell
+Requires=dev-ttyGS0.device
+After=dev-ttyGS0.device m1892-stage2-acceptance.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash --noprofile --norc
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyGS0
+TTYReset=yes
+TTYVHangup=yes
+Restart=always
+RestartSec=1
+KillSignal=SIGHUP
+SendSIGHUP=yes
+TimeoutStopSec=5s
+
+[Install]
+WantedBy=multi-user.target

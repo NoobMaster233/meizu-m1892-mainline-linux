@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.m1892.oem-account-setup" &&
+        subject.local && subject.active && subject.user === "m1892-setup" &&
+        action.lookup("program") === "/usr/libexec/m1892/oem-calamares-wrapper") {
+        return polkit.Result.YES;
+    }
+});

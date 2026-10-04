@@ -1,0 +1,13 @@
+[Unit]
+Description=M1892 Debian 13 daily application acceptance gate
+Requires=m1892-stage3-acceptance.service docker.service
+After=m1892-stage3-acceptance.service docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/m1892/stage6-acceptance
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=graphical.target

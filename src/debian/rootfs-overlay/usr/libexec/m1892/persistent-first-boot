@@ -1,0 +1,62 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail()
+{
+	echo "M1892_PERSISTENT_FIRST_BOOT_FAIL: $*" >&2
+	exit 1
+}
+
+model=$(tr -d '\000' </sys/firmware/devicetree/base/model)
+[ "$model" = 'Meizu 16th Plus (M1892)' ] || fail model
+root_source=$(findmnt -n -o SOURCE /)
+[ "$(readlink -f "$root_source")" = /dev/sda19 ] || fail root-source
+grep -Fxq 'PARTNAME=userdata' /sys/class/block/sda19/uevent || fail partlabel
+[ "$(cat /sys/class/block/sda19/partition)" = 19 ] || fail partition-number
+[ "$(cat /sys/class/block/sda/queue/logical_block_size)" = 4096 ] || fail logical-block-size
+[ "$(blockdev --getsize64 /dev/sda19)" -ge 8589934592 ] || fail partition-too-small
+[ "$(blkid -s TYPE -o value /dev/sda19)" = ext4 ] || fail filesystem-type
+[ "$(blkid -s LABEL -o value /dev/sda19)" = M1892_DEB13 ] || fail filesystem-label
+[ "$(blkid -s UUID -o value /dev/sda19)" = de131892-0000-4000-8000-000000000007 ] ||
+	fail filesystem-uuid
+grep -Fxq 'rootfs_id=m1892-debian13-stage7-persistent' /etc/m1892-rootfs-identity ||
+	fail rootfs-identity
+
+device_bytes=$(blockdev --getsize64 /dev/sda19)
+device_blocks=$((device_bytes / 4096))
+filesystem_blocks=$(tune2fs -l /dev/sda19 2>/dev/null |
+	awk -F: '/^Block count:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
+case "$filesystem_blocks" in ''|*[!0-9]*) fail filesystem-block-count ;; esac
+if [ "$filesystem_blocks" -lt "$device_blocks" ]; then
+	resize2fs /dev/sda19
+fi
+filesystem_blocks=$(tune2fs -l /dev/sda19 2>/dev/null |
+	awk -F: '/^Block count:/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')
+[ "$filesystem_blocks" = "$device_blocks" ] || fail resize-boundary
+filesystem_bytes=$((filesystem_blocks * 4096))
+
+if [ ! -s /etc/machine-id ]; then
+	systemd-machine-id-setup
+fi
+[ -s /etc/machine-id ] || fail machine-id
+if ! find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*_key' -size +0c -print -quit |
+	grep -q .; then
+	command -v ssh-keygen >/dev/null 2>&1 || fail ssh-keygen
+	ssh-keygen -A
+fi
+find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*_key' -size +0c -print -quit |
+	grep -q . || fail ssh-host-key
+install -d -m 0755 /var/lib/m1892
+marker=/var/lib/m1892/persistent-first-boot.pass
+tmp=$marker.tmp
+{
+	printf 'result=pass\n'
+	printf 'root_source=/dev/sda19\n'
+	printf 'filesystem_uuid=de131892-0000-4000-8000-000000000007\n'
+	printf 'filesystem_bytes=%s\n' "$filesystem_bytes"
+	printf 'ssh_host_keys=generated-on-device\n'
+} >"$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" "$marker"
+echo M1892_PERSISTENT_FIRST_BOOT_PASS

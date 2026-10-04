@@ -1,0 +1,15 @@
+name: Debian source contract
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check source, privacy, accounts and capacity
+        run: sh tools/check-source.sh

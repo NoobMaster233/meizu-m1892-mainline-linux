@@ -1,0 +1,51 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+set -eu
+
+fail() { echo "M1892_BLUETOOTH_IDENTITY_FAIL: $*" >&2; exit 1; }
+pass=/run/m1892-bluetooth-identity-pass
+[ "$(id -u)" = 0 ] || fail root-required
+[ "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = "Meizu 16th Plus (M1892)" ] || fail wrong-hardware
+systemctl is-active --quiet m1892-radio-online || fail radio-not-ready
+command -v qmicli >/dev/null || fail qmicli-absent
+command -v btmgmt >/dev/null || fail btmgmt-absent
+command -v script >/dev/null || fail script-absent
+bt_config() { script -qec 'btmgmt config' /dev/null 2>/dev/null | tr -d '\r'; }
+bt_info() { script -qec 'btmgmt info' /dev/null 2>/dev/null | tr -d '\r'; }
+bt_power() { script -qec "btmgmt --index 0 power $1" /dev/null >/dev/null 2>&1; }
+bt_public_address() { script -qec "btmgmt --index 0 public-addr $1" /dev/null >/dev/null 2>&1; }
+raw=$(timeout 12 qmicli -d qrtr://0 --dms-get-mac-address=bt 2>/dev/null | awk '/Contents:/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}')
+printf '%s\n' "$raw" | grep -Eq '^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$' || fail invalid-qmi-address
+address=$(printf '%s\n' "$raw" | awk -F: '{print toupper($6":"$5":"$4":"$3":"$2":"$1)}')
+if [ -r "$pass" ] && grep -Fxq "address=$address" "$pass"; then
+	info=$(bt_info || true)
+	printf '%s\n' "$info" | grep -Fqi "addr $address " || fail stale-pass-marker
+else
+	# On M1892 a fresh controller is intentionally unconfigured until its
+	# owner-specific DMS address is supplied.  Query the configuration list
+	# first: asking for controller info before this point blocks indefinitely.
+	i=0
+	while :; do
+		config=$(bt_config || true)
+		printf '%s\n' "$config" | grep -q '^hci0:' && break
+		i=$((i + 1)); [ "$i" -lt 150 ] || fail hci-index-timeout
+		sleep 0.1
+	done
+	bt_power off || true
+	bt_public_address "$address" || fail address-update
+	i=0
+	while :; do
+		config=$(bt_config || true)
+		if printf '%s\n' "$config" | grep -qx 'Unconfigured index list with 0 items'; then
+			info=$(bt_info || true)
+			printf '%s\n' "$info" | grep -Fqi "addr $address " && break
+		fi
+		i=$((i + 1)); [ "$i" -lt 150 ] || fail address-settle-timeout
+		sleep 0.1
+	done
+	(umask 077; printf 'source=qmi-dms-bt\naddress=%s\nconfigured=yes\n' "$address" >"$pass")
+fi
+bt_power on || fail power-on
+info=$(bt_info || true)
+printf '%s\n' "$info" | grep -q 'current settings:.*powered' || fail not-powered
+echo M1892_BLUETOOTH_IDENTITY_PASS
