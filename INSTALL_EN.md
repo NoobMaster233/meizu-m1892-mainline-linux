@@ -2,11 +2,13 @@
 
 [简体中文](INSTALL.md) | English
 
-This Debian branch currently provides source, not a validated current installation
-bundle for ordinary users. Keep your bootable system. Source ZIPs are not flashing
-ZIPs, and a postmarketOS Release Boot image is not a Debian installation input.
+The [complete installation prerelease](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/releases/tag/debian13-2026.10-preview.1)
+is available, but it is not a stable release. Offline checks passed; a complete fresh
+installation on hardware is still unverified. Keep your current system if you lack backups
+and a recovery path. Source ZIPs are not flashing ZIPs, and a postmarketOS Release Boot
+image is not a Debian installation input.
 
-Once a matching complete release is available, follow the [installation guide](PACKAGE_INSTALL_EN.md):
+To test this prerelease, follow the [installation guide](PACKAGE_INSTALL_EN.md):
 back up → download and verify → enter Fastboot → run the installer → create your account.
 You do not need to enter the source directories or compile anything. Read the
 [backup and rollback preparation](BACKUP_EN.md) before starting.
@@ -18,11 +20,11 @@ are outside the installation write scope.
 
 The Windows installer source uses an independent RAM environment to validate the
 device and assets, transfer userdata, read back its contents, check ext4, expand
-to actual partition capacity and install matching Boot/Recovery. It still requires
-locally assembled complete inputs. Do not replace that procedure with a generic
+to actual partition capacity and install matching Boot/Recovery. Use the complete ZIP
+from one Release, not a mixture of assets. Do not replace that procedure with a generic
 `fastboot flash userdata` command.
 
-A future downloadable bundle will use Calamares for account creation, followed
+The bundle uses Calamares for account creation, followed
 by Plasma's language, timezone, network and display setup. It will contain no
 personal account or shared default password.
 

@@ -6,14 +6,15 @@ Community mainline Linux support for the Meizu 16th Plus (Fastboot product
 `M1892`, Snapdragon 845), using Debian 13, Plasma Mobile, systemd and Freedreno.
 Other Meizu models are not supported.
 
-**This branch currently publishes source. There is no Debian installation bundle
-that has passed the latest complete fresh-install validation.** Do not combine
-postmarketOS Release images with this branch. A validated bundle, its matching
-installer and checksums will be linked here when available.
+**[Complete installation bundle (prerelease)](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/releases/tag/debian13-2026.10-preview.1)**
+includes the precompiled system, Windows installer and checksums; compilation is not required.
+Offline checks passed, but this complete bundle has not passed a fresh installation on hardware.
+It is for testing by users with backups and a recovery path, not a stable release.
+Do not combine postmarketOS Release images with this branch.
 
 - [Features and limitations](KNOWN_ISSUES_EN.md)
 - [Installation and recovery](INSTALL_EN.md)
-- [Complete-bundle procedure](PACKAGE_INSTALL_EN.md) and [backup preparation](BACKUP_EN.md) (check that the matching Release is available first)
+- [Complete-bundle procedure](PACKAGE_INSTALL_EN.md) and [backup preparation](BACKUP_EN.md)
 - [Source and build reproducibility](BUILD_EN.md)
 - [Privacy and firmware](PRIVACY_EN.md)
 - [Existing postmarketOS line](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/tree/main)
