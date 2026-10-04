@@ -10,6 +10,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      # The OEM tests create accounts only inside an isolated user namespace.
+      # Ubuntu 24.04's runner policy otherwise blocks that namespace creation.
+      - name: Allow isolated user-namespace tests on the disposable runner
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Check source, privacy, accounts and capacity
         run: sh tools/check-source.sh

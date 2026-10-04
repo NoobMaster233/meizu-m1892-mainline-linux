@@ -3,7 +3,8 @@
 简体中文 | [English](LICENSES_EN.md)
 
 这是混合许可证源码快照，各文件保留自己的 SPDX、版权和上游许可声明。
-项目原创集成脚本未另行声明时使用 [MIT](src/public-release/licenses/MIT.txt)。
+项目原创集成脚本未另行声明时使用 MIT，全文位于公开树的
+`src/public-release/licenses/MIT.txt`。
 Linux 内核与设备树修改使用 GPL-2.0 及文件声明的兼容许可；EDK2 使用
 BSD-2-Clause-Patent 及其组件许可。KDE、Mesa、PipeWire、ModemManager、
 libqmi、callaudiod、81voltd、qcom-imsd、Gamescope、MangoHud 等遵循各自上游许可。
