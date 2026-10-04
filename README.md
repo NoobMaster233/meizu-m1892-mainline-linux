@@ -12,6 +12,7 @@
 
 - [功能与限制](KNOWN_ISSUES.md)
 - [安装与恢复](INSTALL.md)
+- [完整包安装流程](PACKAGE_INSTALL.md)与[备份准备](BACKUP.md)（使用前先确认同版本 Release 已开放下载）
 - [源码、构建和可复现性](BUILD.md)
 - [隐私与固件说明](PRIVACY.md)
 - [旧 postmarketOS 产品线](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/tree/main)

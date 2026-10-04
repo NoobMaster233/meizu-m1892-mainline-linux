@@ -9,7 +9,9 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 input=${1:-}
 output=${2:-}
 package_archive=${3:-}
-[ -r "$input" ] || {
+device_mode=no
+[ "$input" != --device ] || device_mode=yes
+[ -r "$input" ] || [ "$device_mode" = yes ] || {
 	echo "usage: $0 FLYME_UPDATE_ZIP_OR_DIRECTORY NEW_OUTPUT [PACKAGE_ARCHIVE]" >&2
 	exit 2
 }
@@ -24,9 +26,19 @@ encoder=${ATH10K_BDENCODER:-}
 	echo "set ATH10K_BDENCODER to the pinned qca-swiss-army-knife ath10k-bdencoder" >&2
 	exit 1
 }
-for command in curl debugfs find gzip install mktemp python3 sha256sum tar unzip; do
+for command in cmp cp curl debugfs find gzip install ln mktemp python3 sha256sum tar tr unzip; do
 	command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 1; }
 done
+expected_manifest=${M1892_EXPECTED_FIRMWARE_MANIFEST:-}
+if [ "$device_mode" = yes ]; then
+	[ "$(tr -d '\000' </proc/device-tree/model)" = 'Meizu 16th Plus (M1892)' ] || {
+		echo 'M1892 firmware source identity mismatch' >&2; exit 1;
+	}
+	[ -f "$expected_manifest" ] || { echo 'Device extraction requires the complete firmware contract' >&2; exit 1; }
+	for part in bluetooth modem dsp vendor; do
+		[ -b "/dev/disk/by-partlabel/$part" ] || { echo "Required stock partition missing: $part" >&2; exit 1; }
+	done
+fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/m1892-flyme-extract.XXXXXX")
 cleanup()
@@ -39,7 +51,15 @@ trap cleanup EXIT HUP INT TERM
 member()
 {
 	name=$1 destination=$2
-	if [ -d "$input" ]; then
+	if [ "$device_mode" = yes ]; then
+		case "$name" in
+			firmware-update/BTFM.bin) part=bluetooth ;;
+			firmware-update/NON-HLOS.bin) part=modem ;;
+			firmware-update/dspso.bin) part=dsp ;;
+			*) echo 'Unexpected partition extraction request' >&2; exit 1 ;;
+		esac
+		ln -s "/dev/disk/by-partlabel/$part" "$destination"
+	elif [ -d "$input" ]; then
 		source=$input/$name
 		[ -r "$source" ] || source=$input/${name##*/}
 		[ -r "$source" ] || { echo "missing input member: $name" >&2; exit 1; }
@@ -52,8 +72,10 @@ member()
 member firmware-update/BTFM.bin "$work/BTFM.bin"
 member firmware-update/NON-HLOS.bin "$work/NON-HLOS.bin"
 member firmware-update/dspso.bin "$work/dspso.bin"
-member vendor.new.dat "$work/vendor.new.dat"
-member vendor.transfer.list "$work/vendor.transfer.list"
+if [ "$device_mode" = no ]; then
+	member vendor.new.dat "$work/vendor.new.dat"
+	member vendor.transfer.list "$work/vendor.transfer.list"
+fi
 
 check()
 {
@@ -64,6 +86,7 @@ check()
 		exit 1
 	}
 }
+if [ "$device_mode" = no ]; then
 check 7956dbc763a41ff77fac21e3ee7a15bf198b2ae0560807b63f011c7b9c5d3224 "$work/BTFM.bin"
 check 54c47c6c04af04b0d934fc64697e4007a24bf9498afce59af8aa2314c39cfa74 "$work/NON-HLOS.bin"
 check 49beb0b495a4ae90375bca3370397fedb70062df9673b3127b707669acf8a4a4 "$work/dspso.bin"
@@ -73,6 +96,11 @@ check e828c26707f95b7543627ab242304b6fd5da96992185c7ff6233304c02a4183b "$work/ve
 python3 "$script_dir/sdat2img.py" "$work/vendor.transfer.list" \
 	"$work/vendor.new.dat" "$work/vendor.img"
 check b4cb04c82553b2c1c61725d2132fa1d6c95cdf93063b3a02d31e53968638bdd6 "$work/vendor.img"
+else
+	# Block partitions contain padding and may differ from update archive images.
+	# Accept only when every extracted file matches the exact model contract below.
+	ln -s /dev/disk/by-partlabel/vendor "$work/vendor.img"
+fi
 
 root=$work/root
 install -d "$root/lib/firmware" "$root/usr/share/qcom/sdm845/Meizu/m1892"
@@ -110,10 +138,15 @@ python3 "$script_dir/fat16-extract.py" "$@"
 # B01 entry. Reproduce that pair here.
 upstream_board=$work/upstream-board-2.bin
 upstream_wlanmdsp=$work/upstream-wlanmdsp.mbn
+if [ -n "${M1892_OPEN_FIRMWARE_CACHE:-}" ]; then
+	cp "$M1892_OPEN_FIRMWARE_CACHE/board-2.bin" "$upstream_board"
+	cp "$M1892_OPEN_FIRMWARE_CACHE/wlanmdsp.mbn" "$upstream_wlanmdsp"
+else
 curl -fL --retry 3 -o "$upstream_board" \
 	https://gitlab.com/kernel-firmware/linux-firmware/-/raw/20260221/ath10k/WCN3990/hw1.0/board-2.bin
 curl -fL --retry 3 -o "$upstream_wlanmdsp" \
 	https://gitlab.com/kernel-firmware/linux-firmware/-/raw/20260221/ath10k/WCN3990/hw1.0/wlanmdsp.mbn
+fi
 check 867e1010787764020653812167d93f5952cbbea05f576209d953d8c9322f18aa \
 	"$upstream_board"
 check 92e1501254e6de78c0f2e2cf091507d488b608d07e53acd14813a82744823ec2 \
@@ -179,6 +212,12 @@ find "$root" -type f -print | LC_ALL=C sort | while read -r file; do
 done >"$work/FIRMWARE-MANIFEST.tsv"
 file_count=$(wc -l <"$work/FIRMWARE-MANIFEST.tsv")
 [ "$file_count" -eq 146 ] || { echo "unexpected firmware closure: $file_count" >&2; exit 1; }
+if [ "$device_mode" = yes ]; then
+	cmp -s "$expected_manifest" "$work/FIRMWARE-MANIFEST.tsv" || {
+		echo 'Stock firmware differs from the supported model contract; userdata was not modified' >&2
+		exit 1
+	}
+fi
 
 if [ -n "$package_archive" ]; then
 	install -d "$(dirname "$package_archive")"

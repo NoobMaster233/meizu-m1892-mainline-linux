@@ -1,0 +1,139 @@
+#!/bin/sh
+
+# R272 preserves R206's accepted UFS/display/GPU provider order and adds a
+# continuously-bound, zero-output haptic endpoint.  The exact modules are
+# loaded before QUP1 is bound.  R271 DT makes I2C12 select GPIO44 output-low
+# before it registers haptic@59; the endpoint then becomes the sole GPIO
+# descriptor owner and remains bound for the full boot.
+
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export PATH
+
+log()
+{
+    printf '[m1892-R272] %s\n' "$*" >/dev/console 2>/dev/null || true
+    printf '[m1892-R272] %s\n' "$*" >/dev/kmsg 2>/dev/null || true
+}
+
+driver_name()
+{
+    readlink -f "/sys/bus/platform/devices/$1/driver" 2>/dev/null |
+        awk -F/ '{print $NF}'
+}
+
+bind_platform()
+{
+    label="$1"
+    driver="$2"
+    device="$3"
+    method="${4:-bind}"
+    attempt=1
+
+    while [ "$attempt" -le 8 ]; do
+        current="$(driver_name "$device")"
+        if [ "$current" = "$driver" ]; then
+            log "$label ready driver=$current attempt=$attempt"
+            return 0
+        fi
+        if [ "$method" = probe ]; then
+            target=/sys/bus/platform/drivers_probe
+        else
+            target="/sys/bus/platform/drivers/$driver/bind"
+        fi
+        if [ -e "/sys/bus/platform/devices/$device" ] && [ -w "$target" ]; then
+            /bin/sysfs-write-errno "$target" "$device" \
+                >"/tmp/r272-${label}.bind" 2>&1 || true
+        fi
+        current="$(driver_name "$device")"
+        if [ "$current" = "$driver" ]; then
+            log "$label bound driver=$current attempt=$attempt"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        [ "$attempt" -gt 8 ] || sleep 1
+    done
+    helper="$(tr '\n' ' ' <"/tmp/r272-${label}.bind" 2>/dev/null || true)"
+    log "$label failed expected=$driver current=${current:-none} helper=${helper:-none}"
+    return 1
+}
+
+load_exact_module()
+{
+    name="$1"
+    file="$2"
+    expected="$3"
+    if grep -q "^${name} " /proc/modules 2>/dev/null; then
+        log "$name already loaded"
+        return 0
+    fi
+    actual="$(sha256sum "$file" 2>/dev/null | awk '{print $1}')"
+    [ "$actual" = "$expected" ] || {
+        log "$name hash mismatch actual=${actual:-absent}"
+        return 1
+    }
+    insmod "$file" || {
+        log "$name insmod failed"
+        return 1
+    }
+    log "$name loaded hash=$actual"
+}
+
+log 'accepted R206 providers plus R271 pre-client-low haptics begin'
+bind_platform DISP_CC disp_cc-sdm845 af00000.clock-controller || exit 10
+bind_platform TLMM sdm845-pinctrl 3400000.pinctrl || exit 11
+
+# Preserve the boot-critical R206 post-TLMM UFS retry ahead of optional buses.
+bind_platform UFS_PHY qcom-qmp-ufs-phy 1d87000.phy || exit 40
+if bind_platform UFS_HOST ufshcd-qcom 1d84000.ufshc; then
+    mdev -s 2>/dev/null || true
+    touch /run/m1892-r206-ufs-attempt.done
+else
+    touch /run/m1892-r206-ufs-attempt.failed
+    exit 41
+fi
+
+bind_platform QUP1 geni_se_qup ac0000.geniqup || exit 44
+
+haptic=/sys/bus/i2c/devices/12-0059
+attempt=1
+while [ "$attempt" -le 8 ]; do
+    [ -L "$haptic/driver" ] && break
+    sleep 1
+    attempt=$((attempt + 1))
+done
+[ -L "$haptic/driver" ] || { log 'DW7914 client driver absent'; exit 45; }
+[ "$(readlink -f "$haptic/driver" | awk -F/ '{print $NF}')" = \
+    m1892-dw7914-safe-pulse ] || { log 'DW7914 client driver mismatch'; exit 46; }
+[ "$(cat "$haptic/safety" 2>/dev/null)" = \
+    'id=0x40 gpio_atomic=1 wave=19 loop=0 hard_stop_ms=20 pulses=0 powered=0' ] || {
+    log 'DW7914 no-output safety state mismatch'
+    exit 47
+}
+grep -Eq 'gpio44 .*out low' /sys/kernel/debug/gpio 2>/dev/null || {
+    log 'GPIO44 not low after pre-client pinctrl and endpoint probe'
+    exit 48
+}
+touch /run/m1892-r272-haptics-no-output-pass
+log 'R272 HAPTICS NO-OUTPUT PASS qup1=bound driver=bound gpio44=low pulses=0 power=off'
+
+bind_platform LCD_VDDIO reg-fixed-voltage lcd-vddio-regulator || exit 12
+bind_platform LCD_VDD reg-fixed-voltage lcd-vdd-regulator || exit 13
+bind_platform MDSS msm-mdss ae00000.display-subsystem || exit 14
+bind_platform DSI_PHY msm_dsi_phy ae94400.phy || exit 15
+bind_platform DPU msm_dpu ae01000.display-controller || exit 16
+bind_platform DSI msm_dsi ae94000.dsi || exit 17
+/bin/m1892-i2c5-auto || exit 18
+bind_platform OSM_L3 osm-l3 17d41000.interconnect || exit 20
+bind_platform CPUFREQ qcom-cpufreq-hw 17d43000.cpufreq || exit 21
+[ -d /sys/devices/system/cpu/cpufreq/policy0 ] || exit 22
+[ -d /sys/devices/system/cpu/cpufreq/policy4 ] || exit 23
+bind_platform GPUCC sdm845-gpucc 5090000.clock-controller || exit 30
+bind_platform GPU_SMMU arm-smmu 5040000.iommu probe || exit 31
+bind_platform ADRENO adreno 5000000.gpu || exit 32
+
+connector=pending
+[ ! -r /sys/class/drm/card0-DSI-1/status ] || connector="$(cat /sys/class/drm/card0-DSI-1/status)"
+render=pending
+[ ! -e /dev/dri/renderD128 ] || render=present
+log "R272 PROVIDERS PASS haptics=bound ufs=$(driver_name 1d84000.ufshc) connector=$connector renderD128=$render"
+exit 0

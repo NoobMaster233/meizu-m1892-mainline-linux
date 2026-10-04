@@ -1,0 +1,59 @@
+#!/bin/sh
+
+log()
+{
+    printf '[m1892-i2c5-auto] %s\n' "$*" >/dev/console 2>/dev/null || true
+}
+
+bind_with_retry()
+{
+    label="$1"
+    device="$2"
+    driver="$3"
+    device_path="/sys/bus/platform/devices/$device"
+    driver_path="/sys/bus/platform/drivers/$driver"
+    attempt=0
+
+    while [ "$attempt" -lt 12 ]; do
+        if [ -L "$device_path/driver" ]; then
+            bound="$(readlink -f "$device_path/driver" 2>/dev/null || true)"
+            log "$label bound driver=${bound##*/}"
+            return 0
+        fi
+        if [ ! -e "$device_path" ] || [ ! -d "$driver_path" ]; then
+            attempt=$((attempt + 1))
+            log "$label waiting attempt=$attempt"
+            sleep 5
+            continue
+        fi
+
+        attempt=$((attempt + 1))
+        log "$label bind attempt=$attempt"
+        /bin/sysfs-write-errno "$driver_path/bind" "$device" \
+            >"/tmp/r49-$label.bind" 2>&1 || true
+        while IFS= read -r line; do
+            log "$label helper: $line"
+        done <"/tmp/r49-$label.bind"
+        [ -L "$device_path/driver" ] && continue
+        sleep 5
+    done
+
+    log "$label bind failed after $attempt attempts"
+    return 1
+}
+
+log "R49 automatic controller chain begin"
+
+# Do not create an I2C client, scan any address, or manipulate touch power.
+bind_with_retry GPI 800000.dma-controller gpi || exit 10
+bind_with_retry QUP0 8c0000.geniqup geni_se_qup || exit 11
+bind_with_retry I2C5 894000.i2c geni_i2c || exit 12
+
+if [ -L /sys/bus/i2c/devices/i2c-5 ]; then
+    name="$(cat /sys/bus/i2c/devices/i2c-5/name 2>/dev/null || true)"
+    log "R49 automatic controller chain PASS adapter=i2c-5 name=$name"
+    exit 0
+fi
+
+log "R49 controller drivers bound but i2c-5 adapter absent"
+exit 13

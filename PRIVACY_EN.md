@@ -14,12 +14,13 @@ also needs checks for accounts, SSH host/authorized keys, machine-id, network
 profiles, Bluetooth pairing, wallets, browser sessions, logs and deleted-file
 residue. Source scanning does not substitute for image scanning.
 
-Some hardware requires vendor firmware. Current complete local images use files
-extracted from an owner's Flyme package; they are not provided as public assets
-on this branch. Vendor files without redistribution permission and unique device
-data must not be uploaded. A future vendor-free base will need local firmware
-import; this installation entry point is not complete and is not yet a one-click
-installation path.
+Some hardware requires vendor firmware. The complete installer reads and checks
+the required files from the target phone's stock partitions in RAM before erasing
+userdata. These Flyme files and its Recovery tail remain local to that phone.
+The matching Release still requires final installation acceptance. Public bundles
+may include upstream GPU/WLAN files from linux-firmware under their redistribution
+licenses, with notices; this does not make the firmware itself open source.
+Unique device data is never a public asset.
 
 Owners create their account on first boot; hardware identity is read per device.
 Development USB access is separate from normal Host mode. Public defaults must

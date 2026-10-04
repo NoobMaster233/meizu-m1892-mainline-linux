@@ -4,8 +4,8 @@ set -eu
 
 mode=${1:-host}
 case "$mode" in
-	host|kernel-host|arm-builder) ;;
-	*) echo "usage: $0 host|kernel-host|arm-builder" >&2; exit 2 ;;
+	host|kernel-host|arm-builder|assemble) ;;
+	*) echo "usage: $0 host|kernel-host|arm-builder|assemble" >&2; exit 2 ;;
 esac
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -13,6 +13,10 @@ tree_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 repo_dir=$(git -C "$tree_dir" rev-parse --show-toplevel)
 baseline=m1892-postmarketos-phosh-pre-debian-20260907
 minimum_kib=$((30 * 1024 * 1024))
+# Assembly reuses verified immutable component inputs: an unpacked ~4 GiB
+# root, a fresh 5 GiB filesystem and compressed delivery copies fit in 16 GiB.
+# Full package downloads/compilation still require the original 30 GiB budget.
+[ "$mode" != assemble ] || minimum_kib=$((16 * 1024 * 1024))
 build_root=${M1892_DEBIAN_BUILD_ROOT:-$repo_dir/.build-preflight}
 mmdebstrap_bin=${M1892_MMDEBSTRAP:-}
 
@@ -74,6 +78,10 @@ case "$mode" in
 		need gcc
 		need make
 		;;
+	assemble)
+		for command in fakeroot cpio debugfs e2fsck mkfs.ext4 gzip python3 \
+			fdtget mkbootimg avbtool aarch64-linux-gnu-gcc; do need "$command"; done
+		;;
 esac
 
 printf 'mode=%s\n' "$mode"
@@ -82,7 +90,7 @@ printf 'head=%s\n' "$(git -C "$repo_dir" rev-parse HEAD)"
 printf 'build_root=%s\n' "$build_root"
 printf 'filesystem=%s\n' "$fs_type"
 printf 'available_kib=%s\n' "$available_kib"
-if [ "$mode" = kernel-host ]; then
+if [ "$mode" = kernel-host ] || [ "$mode" = assemble ]; then
 	echo mmdebstrap=not-required
 else
 	printf 'mmdebstrap=%s\n' "$($mmdebstrap_bin --version | head -1)"

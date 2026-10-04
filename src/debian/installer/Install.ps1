@@ -5,9 +5,15 @@ $ErrorActionPreference = 'Stop'
 $package = $PSScriptRoot
 Import-Module (Join-Path $package 'Transport.psm1') -Force
 $manifest = Get-Content -Raw -LiteralPath (Join-Path $package 'manifest.json') | ConvertFrom-Json
-if ($manifest.schema -ne 1 -or $manifest.model -ne 'Meizu 16th Plus (M1892)' -or
-    $manifest.scope -ne 'owner-local-complete') { throw 'Unsupported or incomplete package.' }
+$publicDeviceFirmware = $manifest.schema -eq 2 -and $manifest.scope -eq 'public-device-firmware'
+if ($manifest.model -ne 'Meizu 16th Plus (M1892)' -or
+    (-not $publicDeviceFirmware -and ($manifest.schema -ne 1 -or $manifest.scope -ne 'owner-local-complete'))) {
+    throw 'Unsupported or incomplete package.'
+}
 if (@($manifest.assets).Count -ne 5) { throw 'Package requires exactly five assets.' }
+if ($publicDeviceFirmware -and $manifest.firmware_manifest_sha256 -notmatch '^[a-f0-9]{64}$') {
+    throw 'Missing or malformed per-device firmware contract.'
+}
 if (-not $VerifyOnly) {
     if (-not $FastbootPath) {
         $local = Join-Path $package 'platform-tools\fastboot.exe'
@@ -89,10 +95,35 @@ for ($deadline = [DateTime]::UtcNow.AddSeconds(120); [DateTime]::UtcNow -lt $dea
 if (-not $ready) { throw 'RAM systemd environment unavailable; userdata was not written.' }
 [void](Invoke-M1892Console ('date -u -s "' + [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + '"'))
 [void](Invoke-M1892Console 'mount -o remount,size=3072m /run')
+$firmwareArgument = ''
+if ($publicDeviceFirmware) {
+    # Complete all model firmware and recovery checks BEFORE userdata is erased.
+    Write-Host 'Checking stock firmware read-only; userdata has not been changed.'
+    Write-Output (Invoke-M1892Console '/usr/libexec/m1892/install-device-firmware prepare /run/m1892-device-firmware' -TimeoutSeconds 180)
+    $manifestPath = Join-Path $package 'manifest.json'
+    $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Send-M1892RamFile $manifestPath '/run/m1892-package-manifest.json' $manifestHash
+    Send-M1892RamFile (Join-Path $package $boot.file) ('/run/' + $boot.file) $boot.sha256
+    Send-M1892RamFile (Join-Path $package $recovery.file) ('/run/' + $recovery.file) $recovery.sha256
+    Write-Output (Invoke-M1892Console '/usr/libexec/m1892/install-final-boot prepare /run/m1892-package-manifest.json' -TimeoutSeconds 60)
+    $firmwareArgument = " '/run/m1892-device-firmware'"
+}
 Send-M1892RamFile (Join-Path $package $root.file) '/run/m1892-userdata.ext4.gz' $root.sha256
-$commissionArguments = "'/run/m1892-userdata.ext4.gz' '$($root.sha256)' '$($manifest.root_image_sha256)' '$($manifest.root_image_bytes)'"
+$commissionArguments = "'/run/m1892-userdata.ext4.gz' '$($root.sha256)' '$($manifest.root_image_sha256)' '$($manifest.root_image_bytes)'" + $firmwareArgument
 Write-Output (Invoke-M1892Console "/usr/libexec/m1892/commission-stage7-userdata --check $commissionArguments" -TimeoutSeconds 180)
 Write-Output (Invoke-M1892Console "/usr/libexec/m1892/commission-stage7-userdata --flash ERASE-M1892-USERDATA $commissionArguments" -TimeoutSeconds 600)
+if ($publicDeviceFirmware) {
+    Write-Output (Invoke-M1892Console '/usr/libexec/m1892/install-final-boot write /run/m1892-package-manifest.json' -TimeoutSeconds 120)
+    Write-Output 'M1892_INSTALL_WRITE_READBACK_PASS: system partitions verified; first-start account setup is still required.'
+    try {
+        [void](Invoke-M1892Console 'sync; systemctl --no-block reboot' -TimeoutSeconds 15)
+        Write-Host 'Reboot request accepted. Complete account setup on the phone.'
+    } catch {
+        Write-Warning 'Boot and userdata readback passed, but reboot acknowledgement was not confirmed. Inspect the phone before retrying.'
+        throw
+    }
+    exit 0
+}
 # Use the standard shutdown path. Do not assume a lost USB port means Fastboot.
 try { [void](Invoke-M1892Console 'sync; systemctl reboot --reboot-argument=bootloader' -TimeoutSeconds 15) } catch { Write-Host 'Waiting for standard reboot to Fastboot...' }
 $ready = $false

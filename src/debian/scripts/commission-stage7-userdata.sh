@@ -21,6 +21,7 @@ archive=${1:-}
 expected_archive_sha=${2:-}
 expected_image_sha=${3:-}
 expected_image_bytes=${4:-}
+device_firmware=${5:-}
 target=/dev/sda19
 fail() { echo "M1892_DEBIAN_STAGE7_COMMISSION_FAIL: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail not-root
@@ -39,6 +40,17 @@ case "$expected_image_bytes" in ''|*[!0-9]*) fail invalid-image-size ;; esac
 grep -Eq '^rootfs_id=m1892-debian13-(stage3|installer)-ram$' /etc/m1892-rootfs-identity || fail commissioning-root
 [ "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Meizu 16th Plus (M1892)' ] ||
 	fail model
+# A failed retry must never leave an earlier successful receipt usable.
+if [ "$mode" = commission ]; then
+	rm -f /run/m1892-stage7-commission.pass /run/m1892-stage7-commission.pass.tmp
+fi
+transaction_manifest_sha256=legacy
+firmware_contract_sha256=legacy
+if [ -n "$device_firmware" ]; then
+	[ -f /run/m1892-package-manifest.json ] || fail public-manifest-absent
+	transaction_manifest_sha256=$(sha256sum /run/m1892-package-manifest.json | awk '{print $1}')
+	firmware_contract_sha256=$(sha256sum /usr/share/m1892/installer-firmware/firmware-files.tsv | awk '{print $1}')
+fi
 [ "$(cat /sys/class/block/sda19/partition)" = 19 ] || fail partition-number
 grep -Fxq 'PARTNAME=userdata' /sys/class/block/sda19/uevent || fail partlabel
 [ "$(readlink -f /dev/disk/by-partlabel/userdata)" = "$target" ] || fail userdata-alias
@@ -52,6 +64,9 @@ m1892_validate_userdata_geometry "$expected_image_bytes" \
 findmnt -rn -S "$target" | grep -q . && fail target-mounted
 findmnt -rn -o SOURCE / | grep -Eq '^/dev/loop[0-9]+$' || fail root-not-loopback
 [ "$(sha256sum "$archive" | awk '{print $1}')" = "$expected_archive_sha" ] || fail archive-hash
+if [ -n "$device_firmware" ]; then
+	/usr/libexec/m1892/install-device-firmware verify "$device_firmware" || fail device-firmware
+fi
 if [ "$mode" = check ]; then
 	echo "target=$target"
 	echo "archive_sha256=$expected_archive_sha"
@@ -67,6 +82,7 @@ done
 findmnt -rn -S "$target" | grep -q . && fail target-mounted-after-stop
 gzip -dc "$archive" | dd of="$target" bs=4M conv=fsync status=progress
 sync
+blockdev --flushbufs "$target" || fail userdata-cache-flush
 image_count=$((expected_image_bytes / 4194304))
 after_image=$(dd if="$target" bs=4M count="$image_count" status=none |
 	sha256sum | awk '{print $1}')
@@ -91,8 +107,17 @@ grep -Fxq 'rootfs_id=m1892-debian13-stage7-persistent' \
 [ -x "$check_mount/usr/libexec/m1892/q6voiced" ] || fail mounted-q6voiced
 [ -x "$check_mount/usr/libexec/m1892/callaudiod" ] || fail mounted-callaudiod
 umount "$check_mount"
+if [ -n "$device_firmware" ]; then
+	mount -t ext4 -o rw,noatime "$target" "$check_mount"
+	/usr/libexec/m1892/install-device-firmware apply "$device_firmware" --root "$check_mount" || fail firmware-install
+	umount "$check_mount"
+	e2fsck -fn "$target" >/run/m1892-stage7-e2fsck-after-firmware.log 2>&1 || fail firmware-final-filesystem
+fi
 trap - EXIT HUP INT TERM
-cat >/run/m1892-stage7-commission.pass <<EOF
+if [ -n "$device_firmware" ]; then
+	[ "$(sha256sum /run/m1892-package-manifest.json | awk '{print $1}')" = "$transaction_manifest_sha256" ] || fail manifest-changed
+fi
+cat >/run/m1892-stage7-commission.pass.tmp <<EOF
 result=pass
 target=/dev/sda19
 archive_sha256=$expected_archive_sha
@@ -101,6 +126,9 @@ capacity_source=kernel-partition-geometry
 filesystem_uuid=de131892-0000-4000-8000-000000000007
 filesystem_label=M1892_DEB13
 filesystem_bytes=$(blockdev --getsize64 "$target")
+transaction_manifest_sha256=$transaction_manifest_sha256
+firmware_contract_sha256=$firmware_contract_sha256
 EOF
+mv /run/m1892-stage7-commission.pass.tmp /run/m1892-stage7-commission.pass
 cat /run/m1892-stage7-commission.pass
 echo M1892_DEBIAN_STAGE7_COMMISSION_PASS

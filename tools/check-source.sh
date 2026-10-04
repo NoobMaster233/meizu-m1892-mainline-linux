@@ -5,12 +5,14 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 python3 "$root/tools/verify-source.py" "$root"
 python3 "$root/tools/test-source-privacy.py"
 python3 - "$root" <<'PY'
-import pathlib, re, subprocess, sys
+import ast, pathlib, re, subprocess, sys
 root = pathlib.Path(sys.argv[1])
 count = 0
 for path in sorted((root / 'src/debian').rglob('*')):
     if not path.is_file():
         continue
+    if path.suffix == '.py':
+        ast.parse(path.read_text(), filename=str(path.relative_to(root)))
     first = path.read_bytes().split(b'\n', 1)[0]
     if first in (b'#!/bin/sh', b'#!/bin/bash', b'#!/usr/bin/env bash'):
         subprocess.run(['bash' if b'bash' in first else 'sh', '-n', str(path)], check=True)
@@ -27,6 +29,7 @@ scripts=$root/src/debian/scripts
 sh "$scripts/test-commission-stage7-geometry.sh"
 bash "$scripts/test-oem-account-state-machine.sh"
 sh "$scripts/test-initialstart-policy.sh"
+python3 "$scripts/test-release-image-privacy.py"
 for name in stage6-oem-image.env stage6-oem-development-image.env; do
     (
         M1892_DEBIAN_CONFIG_DIR=$root/src/debian/config

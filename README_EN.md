@@ -13,6 +13,7 @@ installer and checksums will be linked here when available.
 
 - [Features and limitations](KNOWN_ISSUES_EN.md)
 - [Installation and recovery](INSTALL_EN.md)
+- [Complete-bundle procedure](PACKAGE_INSTALL_EN.md) and [backup preparation](BACKUP_EN.md) (check that the matching Release is available first)
 - [Source and build reproducibility](BUILD_EN.md)
 - [Privacy and firmware](PRIVACY_EN.md)
 - [Existing postmarketOS line](https://github.com/NoobMaster233/meizu-m1892-mainline-linux/tree/main)
